@@ -1,0 +1,106 @@
+name: Build
+
+# Every push builds and tests the Windows download. A tag like v1.2.3 also
+# publishes it as a GitHub release (the tag must match __version__ in hue_engine.py).
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller==6.22.3
+
+      - name: Read version
+        run: |
+          $version = (Select-String -Path hue_engine.py -Pattern '^__version__ = "(.+)"').Matches[0].Groups[1].Value
+          "VERSION=$version" >> $env:GITHUB_ENV
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match __version__ $version"
+          }
+
+      - name: Unit tests
+        run: python -m unittest tests.test_engine -v
+
+      - name: Build the app
+        run: python -m PyInstaller packaging/monitor_lights.spec --noconfirm
+
+      - name: Self-test the app
+        run: |
+          $p = Start-Process "dist\Monitor Lights\Monitor Lights.exe" -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content "$env:APPDATA\Monitor Lights\logs\selftest.log" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
+
+      - name: Build the installer
+        run: |
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 7\ISCC.exe",
+                      "$env:ProgramFiles\Inno Setup 7\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DAppVersion=$env:VERSION" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Test install, run and uninstall
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "Monitor Lights"
+          $setup = "dist\MonitorLights-Setup-$env:VERSION.exe"
+          $p = Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$dir`"", "/TASKS=addtopath" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup failed ($($p.ExitCode))" }
+          $p = Start-Process "$dir\Monitor Lights.exe" -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "the installed app failed its selftest" }
+          & "$dir\lights.exe" list
+          if ($LASTEXITCODE -ne 0) { throw "lights.exe failed" }
+          if ([Environment]::GetEnvironmentVariable("Path", "User") -notlike "*$dir*") { throw "PATH was not updated" }
+          Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART" -Wait
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path "$dir\Monitor Lights.exe") -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path "$dir\Monitor Lights.exe") { throw "uninstall left the program behind" }
+          if ([Environment]::GetEnvironmentVariable("Path", "User") -like "*$dir*") { throw "PATH was not cleaned up" }
+          "install, selftest, lights.exe and uninstall: OK"
+
+      - name: Portable zip
+        run: Compress-Archive -Path "dist\Monitor Lights" -DestinationPath "dist\MonitorLights-$env:VERSION-portable.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: monitor-lights-${{ env.VERSION }}
+          path: |
+            dist/MonitorLights-Setup-*.exe
+            dist/MonitorLights-*-portable.zip
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = "dist\MonitorLights-Setup-$env:VERSION.exe", "dist\MonitorLights-$env:VERSION-portable.zip"
+          gh release view $env:GITHUB_REF_NAME 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME @files --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME @files --title "Monitor Lights $env:VERSION" --notes-file packaging\release-notes.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw "publishing the release failed" }

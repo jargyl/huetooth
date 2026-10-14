@@ -1,0 +1,21 @@
+# Personal settings and logs - never commit these (they hold your lights' addresses)
+hue_config.json
+config.json
+*.corrupt.json
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output
+build/
+dist/
+
+# Windows
+*.lnk
+Thumbs.db
+desktop.ini
