@@ -19,6 +19,7 @@ Fast, reliable, and no Hue Bridge needed.
 - **Fast.** The Bluetooth connection stays open, so a change reaches the light in about a tenth of a second.
 - **Doesn't give up.** Light switched off at the wall, out of range, Windows busy? It reconnects by itself.
 - **Set it and forget it.** Pick a color while a light is still unreachable: it is applied the moment the light is back, even if you already closed the window.
+- **Lives next to the clock.** Close the window and Huetooth stays in the notification area. Right-click its icon to turn everything on or off or pick a scene. It uses almost no CPU there, so it's fine to leave running while you game.
 - **Command line.** `lights color red`, `lights scene Evening`… for shortcuts, scripts and Stream Deck.
 - No account, no cloud, nothing to sign in to.
 
@@ -48,9 +49,16 @@ Lights that are already paired with Windows connect straight away. To see which 
 
 - Choose **Both**, **Light 1** or **Light 2**, then a color, white, effect or scene.
 - Keyboard: <kbd>Space</kbd> on/off, <kbd>1</kbd> / <kbd>2</kbd> / <kbd>B</kbd> choose the light, <kbd>↑</kbd> <kbd>↓</kbd> brightness.
-- Close the window when you're done. If a light was still unreachable, Huetooth keeps working invisibly until your choice is applied, and lets you know:
+- Close the window when you're done: Huetooth keeps running in the notification area (next to the clock), still connected, so your lights react instantly. Click its icon to open the window again. Right-click it for **Turn all on/off**, **Scenes** and **Quit Huetooth**.
+- A choice for a light that is still unreachable is applied as soon as the light is back, and Windows lets you know with a notification.
 
-<img src="docs/notification.png" width="300" alt="Notification: your choice is applied as soon as that light connects">
+**Tips**
+
+- Windows 11 tucks new icons away behind the **^** arrow next to the clock. Drag the Huetooth icon from there onto the taskbar to keep it in view.
+- Want Huetooth there from the moment you sign in? Open **Settings** and switch on **Start with Windows**.
+- Prefer the close button to quit the app? **Settings → When I close the window → Quit Huetooth**.
+
+**Gaming:** in the tray Huetooth uses well under 0.1% of one CPU core, nothing on the GPU, and Bluetooth only for a tiny check every 45 seconds. Notifications wait while a game runs full screen. If you play with a Bluetooth headset or controller on the same adapter and ever notice hiccups, set **Settings → Release the lights after inactivity**.
 
 ## Command line (optional)
 
@@ -75,6 +83,7 @@ When the app is open, commands go through it and are instant. When it isn't, `li
 | **One moment…** | Windows is still closing an earlier connection, for example right after restarting the app. This sorts itself out within about 20 seconds. |
 | **In use by another app** | Only one program on a PC can control a light at a time. Close other Hue tools or a second copy of Huetooth. |
 | **Not paired with Windows** | Remove the light in Windows Settings → Bluetooth & devices, put it in pairing mode again and use **Find lights → Add**. |
+| You can't find the tray icon | It's behind the **^** arrow next to the clock. Drag it onto the taskbar to keep it in view. |
 | The Hue app on your phone can't connect | In Settings, choose *Release the lights after inactivity*, or click **Release now**. |
 | Connections drop often | USB 3 ports and cables disturb Bluetooth. Use a USB 2 port, or a short USB extension cable so the adapter sits away from the PC and in sight of the lights. |
 | Your lights are on a Hue Bridge | Bluetooth still works alongside the Bridge. See [these notes from HueBLE](https://hueble.readthedocs.io/en/latest/usage.html) on making such lights discoverable. |

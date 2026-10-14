@@ -22,6 +22,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "idle_release_minutes": 0,   # 0 = keep the lights connected while the app is open
     "transition": 4,             # default fade for buttons, in steps of 100 ms
     "pending_keep_minutes": 0,   # how long a choice waits for an unreachable light; 0 = until it connects
+    "close_to_tray": True,       # the window's close button keeps Huetooth running in the tray
 }
 
 # Scenes: "states" is a list (applied by light position, repeating) or a dict

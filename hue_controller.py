@@ -27,6 +27,7 @@ from tkinter import font as tkfont
 import hue_colors as colors
 import hue_config as config
 import hue_gfx as gfx
+import hue_tray as tray
 from hue_engine import (
     EFFECT_NAMES, EFFECTS, IPC_PORT, EngineThread, HueManager, IpcServer, LampInfo, LampState,
     LampStatus, PROJECT_URL, SimDevice, SimTransport, Timing, __version__, controller_running, ipc_request,
@@ -75,6 +76,7 @@ IDLE_CHOICES = [(0, "Never"), (5, "5 min"), (15, "15 min"), (30, "30 min"), (60,
 KEEP_CHOICES = [(1, "1 min"), (10, "10 min"), (60, "1 hour"), (0, "Until connected")]
 BACKGROUND_LIMIT = 3600      # an invisible app gives up waiting after an hour
 BACKGROUND_START_GRACE = 25  # --background: time for the CLI to hand over its command
+TRAY_FACTORY = tray.TrayIcon  # tests swap in a fake, so no icon shows up during a test run
 EFFECT_BASE = {1: {"mireds": 455}, 2: {"xy": (0.58, 0.39)}}   # warm base for candle/fireplace
 
 SCALE = 1.0
@@ -193,6 +195,46 @@ class SmoothCanvas(tk.Canvas):
     def clear(self, tag="art"):
         self.delete(tag)
         self._refs.pop(tag, None)
+
+
+class ScrollBar(SmoothCanvas):
+    """Slim rounded scrollbar for a Canvas; empty while everything fits."""
+
+    def __init__(self, master, target: tk.Canvas, width=10):
+        super().__init__(master, width=px(width))
+        self.target, self.view, self._grab = target, (0.0, 1.0), None
+        target.configure(yscrollcommand=self.set_view)
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<ButtonPress-1>", self._press)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", lambda e: setattr(self, "_grab", None))
+
+    def set_view(self, first, last):
+        self.view = (float(first), float(last))
+        self._draw()
+
+    def _draw(self):
+        self.clear()
+        first, last = self.view
+        height, width = self.winfo_height(), int(self["width"])
+        if last - first >= 0.999 or height < 2:
+            return
+        thumb = max(px(28), int((last - first) * height))
+        top = min(first * height, height - thumb)
+        bar = width - px(4)
+        self.draw_image(px(2), top, gfx.rounded_rect(bar, thumb, bar / 2, SURFACE_4))
+
+    def _press(self, e):
+        first, last = self.view
+        height = max(1, self.winfo_height())
+        if not first * height <= e.y <= last * height:      # a click beside the thumb jumps there
+            self.target.yview_moveto(max(0.0, e.y / height - (last - first) / 2))
+            first, last = self.view
+        self._grab = e.y / height - first
+
+    def _drag(self, e):
+        if self._grab is not None:
+            self.target.yview_moveto(max(0.0, e.y / max(1, self.winfo_height()) - self._grab))
 
 
 class PillButton(SmoothCanvas):
@@ -845,9 +887,13 @@ def ask_text(parent, title, prompt, initial="") -> str | None:
 
 def center_on(win: tk.Toplevel, parent: tk.Misc):
     win.update_idletasks()
+    left, top, right, bottom = screen_work_area(parent)
     x = parent.winfo_rootx() + (parent.winfo_width() - win.winfo_reqwidth()) // 2
     y = parent.winfo_rooty() + px(80)
-    win.geometry(f"+{max(0, x)}+{max(0, y)}")
+    # Keep the whole window (and its title bar) on the screen the app is on.
+    x = max(left, min(x, right - win.winfo_reqwidth()))
+    y = max(top, min(y, bottom - win.winfo_reqheight() - px(40)))
+    win.geometry(f"+{x}+{y}")
 
 
 def section(master, title):
@@ -871,8 +917,15 @@ class SettingsWindow:
         self.app = app
         self.win = tk.Toplevel(app.root)
         style_toplevel(self.win, app.root, "Settings")
-        outer = tk.Frame(self.win, bg=BG, padx=px(20), pady=px(14))
-        outer.pack(fill="both", expand=True)
+        # On a small screen the settings scroll; Close always stays in view.
+        view = tk.Frame(self.win, bg=BG)
+        view.pack(side="top", fill="both", expand=True)
+        self.canvas = tk.Canvas(view, bg=BG, highlightthickness=0, bd=0)
+        ScrollBar(view, self.canvas).pack(side="right", fill="y", pady=px(6))
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.body = outer = tk.Frame(self.canvas, bg=BG, padx=px(20), pady=px(14))
+        self.canvas.create_window(0, 0, window=outer, anchor="nw")
+        self.scrolls = False
         tk.Label(outer, text="Settings", font=F.title, bg=BG, fg=TEXT).pack(anchor="w")
 
         body = section(outer, "Lights")
@@ -898,6 +951,21 @@ class SettingsWindow:
         PillButton(row, "Reconnect", icon=ICON_REFRESH, command=lambda: app.reconnect(None),
                    height=32).pack(side="left", padx=(px(8), 0))
 
+        body = section(outer, "In the background")
+        tk.Label(body, text="When I close the window", font=F.body, bg=BG, fg=TEXT).pack(anchor="w")
+        current = "tray" if app.cfg["settings"].get("close_to_tray", True) else "quit"
+        Segmented(body, [("tray", "Keep running in the tray"), ("quit", "Quit Huetooth")], current,
+                  lambda key: app.set_close_to_tray(key == "tray"), height=32).pack(fill="x", pady=(px(6), 0))
+        row = tk.Frame(body, bg=BG)
+        row.pack(fill="x", pady=(px(10), 0))
+        self.autostart = Toggle(row, value=app.autostart_enabled(), command=app.set_autostart)
+        self.autostart.set(self.autostart.value, enabled=not app.sim)
+        self.autostart.pack(side="left")
+        tk.Label(row, text="Start with Windows (in the tray)", font=F.body, bg=BG,
+                 fg=TEXT).pack(side="left", padx=(px(10), 0))
+        note(body, "In the tray Huetooth stays connected, so the lights react instantly. It uses almost "
+                   "no CPU there (well under 0.1% of one core), so it won't slow down your games.")
+
         body = section(outer, "Before a light is connected")
         tk.Label(body, text="Keep your choice until the light is reachable", font=F.body, bg=BG,
                  fg=TEXT).pack(anchor="w")
@@ -905,8 +973,7 @@ class SettingsWindow:
         Segmented(body, [(str(v), l) for v, l in KEEP_CHOICES], str(current),
                   lambda key: app.set_pending_keep(int(key)), height=32).pack(fill="x", pady=(px(6), 0))
         note(body, "Pick a color or scene while a light is still connecting or switched off: the app "
-                   "applies it as soon as the light is reachable. If you close the window first, the app "
-                   "keeps working invisibly until everything is applied (up to an hour).")
+                   "applies it as soon as the light is reachable, also after you close the window.")
 
         body = section(outer, "Fade for buttons and scenes")
         current = app.cfg["settings"]["transition"]
@@ -925,12 +992,26 @@ class SettingsWindow:
                    "(a short USB extension cable often helps) and in sight of the lights. The app retries "
                    "failed connections by itself; the log shows what happens.")
 
-        footer = tk.Frame(outer, bg=BG)
-        footer.pack(fill="x", pady=(px(16), 0))
+        footer = tk.Frame(self.win, bg=BG, padx=px(20), pady=px(12))
+        footer.pack(side="top", fill="x")
         PillButton(footer, "Close", command=self.close, width=110).pack(side="right")
         self.win.protocol("WM_DELETE_WINDOW", self.close)
         self.win.bind("<Escape>", lambda e: self.close())
+        self.win.bind("<MouseWheel>", self._scroll)
+        self._fit()
         center_on(self.win, app.root)
+
+    def _fit(self):
+        self.body.update_idletasks()
+        width, height = self.body.winfo_reqwidth(), self.body.winfo_reqheight()
+        left, top, right, bottom = screen_work_area(self.app.root)
+        room = bottom - top - px(120)            # title bar, Close button and a margin
+        self.scrolls = height > room
+        self.canvas.configure(width=width, height=min(height, room), scrollregion=(0, 0, width, height))
+
+    def _scroll(self, e):
+        if self.scrolls:
+            self.canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
 
     def _build_lamp_rows(self):
         for child in self.lamp_rows.winfo_children():
@@ -956,10 +1037,12 @@ class SettingsWindow:
     def _remove(self, lamp_id):
         if self.app.remove_lamp(lamp_id):
             self._build_lamp_rows()
+            self._fit()
 
     def refresh(self):
         if self.win.winfo_exists():
             self._build_lamp_rows()
+            self._fit()
 
     def close(self):
         self.app.settings_window = None
@@ -1077,6 +1160,31 @@ def dark_title_bar(window: tk.Misc):
         pass
 
 
+def screen_work_area(widget: tk.Misc) -> tuple[int, int, int, int]:
+    """Usable rectangle (without the taskbar) of the screen this widget is on."""
+    import ctypes.wintypes
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", ctypes.wintypes.DWORD), ("rcMonitor", ctypes.wintypes.RECT),
+                    ("rcWork", ctypes.wintypes.RECT), ("dwFlags", ctypes.wintypes.DWORD)]
+
+    try:
+        user32 = ctypes.WinDLL("user32")
+        user32.MonitorFromPoint.argtypes = [ctypes.wintypes.POINT, ctypes.wintypes.DWORD]
+        user32.MonitorFromPoint.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
+        point = ctypes.wintypes.POINT(widget.winfo_rootx() + widget.winfo_width() // 2,
+                                      widget.winfo_rooty() + px(40))
+        monitor = user32.MonitorFromPoint(point, 2)                        # MONITOR_DEFAULTTONEAREST
+        info = MONITORINFO(cbSize=ctypes.sizeof(MONITORINFO))
+        if monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            rect = info.rcWork
+            return rect.left, rect.top, rect.right, rect.bottom
+    except Exception:
+        pass
+    return work_area()
+
+
 def work_area() -> tuple[int, int, int, int]:
     """Usable desktop rectangle of the main screen (without the taskbar)."""
     import ctypes.wintypes
@@ -1187,8 +1295,11 @@ class App:
         self._ever_shown = False
         self._close_started = 0.0
         self._close_job = None
+        self._quit_when_done = True     # False: closing hides the app in the tray
         self._dropped_before: dict[str, int] = {}
         self.toast_factory = Toast
+        self.tray = None
+        self._tray_retries = 0
         if self.target != "all" and self.target not in {l["id"] for l in cfg["lamps"]}:
             self.target = "all"
 
@@ -1196,8 +1307,68 @@ class App:
         log.addHandler(self._log_handler)
         self._build()
         self._start_engine()
+        self._start_tray()
         self._poll_job = self.root.after(40, self._poll)
         self._tick_job = self.root.after(500, self._tick)
+        self.root.bind("<Map>", self._on_map, add="+")
+
+    # -- tray icon ---------------------------------------------------------------------
+
+    def _start_tray(self):
+        if getattr(self.args, "no_tray", False):
+            return
+        try:
+            self.tray = TRAY_FACTORY(gfx.ASSETS / "app.ico", "Huetooth", on_open=self.show_window,
+                                     menu=self._tray_menu, on_action=self._tray_action)
+            if not self.tray.start() and self.tray.hwnd:
+                self.root.after(3000, self._retry_tray)    # right after sign-in Explorer may not be ready
+        except Exception:
+            log.warning("No tray icon", exc_info=True)
+            self.tray = None
+
+    def _retry_tray(self):
+        if self.tray is None or self.tray.visible or not self.tray.hwnd:
+            return
+        self._tray_retries += 1
+        if not self.tray.add() and self._tray_retries < 40:
+            self.root.after(3000, self._retry_tray)
+
+    @property
+    def tray_ready(self) -> bool:
+        return self.tray is not None and self.tray.visible
+
+    def _tray_menu(self):
+        connected = sum(1 for info in self.infos.values() if info.connected)
+        status = (f"{connected} of {len(self.cfg['lamps'])} lights connected" if self.cfg["lamps"]
+                  else "No lights yet")
+        scenes = [(scene["name"], f"scene:{i}") for i, scene in enumerate(config.all_scenes(self.cfg))]
+        has_lights = [] if self.cfg["lamps"] else ["disabled"]
+        return [("Open Huetooth", "open", "default"),
+                (status, "", "disabled"),
+                None,
+                ("Turn all on", "on", *has_lights),
+                ("Turn all off", "off", *has_lights),
+                ("Scenes", scenes if self.cfg["lamps"] else []),
+                None,
+                ("Quit Huetooth", "quit")]
+
+    def _tray_action(self, action: str):
+        all_ids = [l["id"] for l in self.cfg["lamps"]]
+        if action == "open":
+            self.show_window()
+        elif action in ("on", "off") and all_ids:
+            self.send(all_ids, power=action == "on")
+        elif action.startswith("scene:") and all_ids:
+            scenes = config.all_scenes(self.cfg)
+            index = int(action.split(":", 1)[1])
+            if index < len(scenes):
+                self.apply_scene(scenes[index], ids=all_ids)
+        elif action == "quit":
+            self.quit()
+
+    def _update_tray_tooltip(self, status: str):
+        if self.tray is not None:
+            self.tray.set_tooltip(f"Huetooth\n{status}")
 
     # -- layout ------------------------------------------------------------------
 
@@ -1624,8 +1795,8 @@ class App:
         if state and state.effect and final:
             self.send(effect_speed=bri_of(value))
 
-    def apply_scene(self, scene):
-        ids = self._target_ids()
+    def apply_scene(self, scene, ids=None):
+        ids = ids or self._target_ids()
         all_ids = [l["id"] for l in self.cfg["lamps"]]
         per_lamp = config.scene_fields(scene, all_ids)
         transition = self.cfg["settings"]["transition"]
@@ -1636,8 +1807,8 @@ class App:
         for lamp_id, fields in per_lamp.items():
             if lamp_id in ids:
                 self.run_engine(lambda mgr, l=lamp_id, f=fields: mgr.command([l], transition=transition, **f))
-        log.info("Scene '%s' applied to %s", scene["name"], "all lights" if self.target == "all" else
-                 self._lamp_name(self.target))
+        log.info("Scene '%s' applied to %s", scene["name"], "all lights" if set(ids) >= set(all_ids) else
+                 ", ".join(self._lamp_name(i) for i in ids))
 
     def save_scene(self):
         if not self.infos:
@@ -1724,6 +1895,25 @@ class App:
     def set_transition(self, value):
         self.cfg["settings"]["transition"] = value
         self.save_config()
+
+    def set_close_to_tray(self, on: bool):
+        self.cfg["settings"]["close_to_tray"] = on
+        self.save_config()
+
+    def autostart_enabled(self) -> bool:
+        try:
+            return tray.autostart_enabled()
+        except OSError:
+            return False
+
+    def set_autostart(self, on: bool):
+        if self.sim:
+            return
+        try:
+            tray.set_autostart(on)
+            log.info("Start with Windows: %s", "on" if on else "off")
+        except OSError as exc:
+            log.error("Could not change Start with Windows: %s", exc)
 
     def set_pending_keep(self, minutes):
         self.cfg["settings"]["pending_keep_minutes"] = minutes
@@ -1888,6 +2078,15 @@ class App:
             self.banner.pack(fill="x", pady=(px(10), 0), after=self.banner_anchor)
         elif not visible and self.banner.winfo_ismapped():
             self.banner.pack_forget()
+        if total == 0:
+            tip = "No lights yet"
+        elif statuses == {LampStatus.BT_OFF}:
+            tip = "Bluetooth is off"
+        elif statuses == {LampStatus.NO_ADAPTER}:
+            tip = "No Bluetooth adapter"
+        else:
+            tip = f"{connected} of {total} lights connected"
+        self._update_tray_tooltip(tip)
 
     def _append_log(self, record: logging.LogRecord):
         stamp = time.strftime("%H:%M:%S", time.localtime(record.created))
@@ -1931,6 +2130,7 @@ class App:
                     return
         except queue.Empty:
             pass
+        visible = self._visible()
         if latest:
             known = {l["id"] for l in self.cfg["lamps"]}
             for lamp_id, info in latest.items():
@@ -1939,13 +2139,19 @@ class App:
                 self.infos[lamp_id] = info
                 self._maybe_adopt_name(info)
                 tile = self.tile_widgets.get(lamp_id)
-                if tile:
+                if tile and visible:
                     tile.update_info(info, self._is_selected(lamp_id))
             self._refresh_status()
-            self._sync_controls()
-        self._poll_job = self.root.after(40, self._poll)
+            if visible:
+                self._sync_controls()
+        # While nobody can see the window (hidden in the tray, minimized, a game
+        # in front), check for news less often: almost no work in the background.
+        self._poll_job = self.root.after(40 if visible else 250, self._poll)
 
     def _tick(self):
+        if not self._visible():
+            self._tick_job = self.root.after(2000, self._tick)
+            return
         self._blink = not self._blink
         for lamp_id, tile in self.tile_widgets.items():
             info = self.infos.get(lamp_id)
@@ -1956,10 +2162,30 @@ class App:
         self._sync_controls()
         self._tick_job = self.root.after(500, self._tick)
 
+    def _visible(self) -> bool:
+        try:
+            return self.root.state() == "normal"
+        except tk.TclError:
+            return False
+
+    def _on_map(self, event):
+        """The window is back on screen (shown again or restored): catch up at once."""
+        if event.widget is not self.root:
+            return
+        for lamp_id, tile in self.tile_widgets.items():
+            if lamp_id in self.infos:
+                tile.update_info(self.infos[lamp_id], self._is_selected(lamp_id))
+        self._refresh_status()
+        self._sync_controls()
+        if self._poll_job is not None:          # back to the quick rhythm right away
+            self.root.after_cancel(self._poll_job)
+            self._poll_job = self.root.after(10, self._poll)
+
     def show_window(self):
         if self._closing:
             # Reopened while finishing in the background: become a normal window again.
             self._closing = self._background = self._started_hidden = False
+            self._announced = self._seen_waiting = False
             if self._close_job is not None:
                 self.root.after_cancel(self._close_job)
                 self._close_job = None
@@ -1984,28 +2210,44 @@ class App:
         except OSError as exc:
             log.error("Saving settings failed: %s", exc)
 
-    def close(self):
-        """Hide at once. Choices still waiting for a lamp keep the app running invisibly
-        until they are applied; otherwise it stops right away."""
-        if self._closing:
-            return
+    def _remember_window(self):
         ui = self.cfg.setdefault("ui", {})
         ui.update({"target": self.target, "tab": self.tab, "log_open": self.log_open})
-        if self._ever_shown:
+        if self._ever_shown and self._visible():
             ui["position"] = [self.root.winfo_x(), self.root.winfo_y()]
         self.save_config()
+
+    def close(self):
+        """The window's close button. In the tray (the default) Huetooth keeps running
+        hidden: still connected, so the lights react at once. Otherwise it hides, finishes
+        choices that still wait for a light and then stops."""
+        if self._closing:
+            return
+        self._remember_window()
         if self.settings_window is not None:
             self.settings_window.close()
         self.root.withdraw()
         self._closing = True
+        self._quit_when_done = not (self.tray_ready and self.cfg["settings"].get("close_to_tray", True))
         self._close_started = time.monotonic()
         self._close_check()
+
+    def quit(self):
+        """'Quit Huetooth' in the tray menu: stop right away."""
+        self._remember_window()
+        self._shutdown()
 
     def start_in_background(self):
         """--background (used by hue_cli.py): run invisibly until handed-over choices are applied."""
         self._closing = self._background = self._started_hidden = True
+        self._quit_when_done = True
         self._close_started = time.monotonic()
         self._close_check()
+
+    def start_in_tray(self):
+        """--tray (Start with Windows): connect the lights, show only the tray icon."""
+        if self.tray is None:
+            self.show_window()         # no tray icon possible: don't hide where nobody can find it
 
     def _waiting_lamps(self) -> list[str]:
         """Names of lamps with a choice that is not on the lamp yet (asked from the engine)."""
@@ -2017,13 +2259,21 @@ class App:
             return []
         return [self._lamp_name(lamp_id) for lamp_id in ids]
 
-    def _toast(self, text, **kw):
-        try:
-            self.toast_factory(self.root, text, on_click=self.show_window, **kw)
-        except Exception:
-            log.debug("showing a notification failed", exc_info=True)
-            if kw.get("on_close"):
-                kw["on_close"]()
+    def _notify(self, text, duration=5000, then=None):
+        """Tell the user something while the window is hidden. From the tray this is a
+        Windows notification (Windows holds it back during full-screen games); otherwise
+        our own small pop-up, skipped while a game runs full screen. `then` runs once the
+        message is out."""
+        if not self._quit_when_done and self.tray_ready:
+            self.tray.notify("Huetooth", text)
+        elif not tray.user_busy():
+            try:
+                self.toast_factory(self.root, text, on_click=self.show_window, duration=duration, on_close=then)
+                return
+            except Exception:
+                log.debug("showing a notification failed", exc_info=True)
+        if then:
+            then()
 
     def _close_check(self):
         self._close_job = None
@@ -2044,13 +2294,14 @@ class App:
                 self._dropped_before = {i: info.dropped for i, info in self.infos.items()}
                 log.info("Continuing in the background until %s is updated", names)
                 one = len(waiting) == 1
-                self._toast(f"Your choice for {names} is applied as soon as {'that light' if one else 'the lights'} "
-                            f"{'connects' if one else 'connect'}. Click here to open the app.", duration=7000)
-            if elapsed > BACKGROUND_LIMIT:
+                self._notify(f"Your choice for {names} is applied as soon as {'that light' if one else 'the lights'} "
+                             f"{'connects' if one else 'connect'}. Click here to open the app.", duration=7000)
+            if self._quit_when_done and elapsed > BACKGROUND_LIMIT:
                 log.warning("Stopped waiting: %s stayed unreachable", names)
-                self._toast(f"Stopped: {names} could not be reached for an hour.", on_close=self._shutdown_unless_reopened)
+                self._notify(f"Stopped: {names} could not be reached for an hour.", then=self._finish_close)
                 return
-            self._close_job = self.root.after(400, self._close_check)
+            # A light can stay away for long (switched off at the wall): ask less often then.
+            self._close_job = self.root.after(400 if elapsed < 60 else 2000, self._close_check)
             return
         if self._started_hidden and not self._seen_waiting and elapsed < BACKGROUND_START_GRACE:
             self._close_job = self.root.after(300, self._close_check)   # hand-over still on its way
@@ -2061,13 +2312,25 @@ class App:
                 text = f"Not applied for {' and '.join(failed)}: the light was unreachable for too long."
             else:
                 text = "Done: your lights are updated."
-            self._toast(text, duration=3500, on_close=self._shutdown_unless_reopened)
+            self._notify(text, duration=3500, then=self._finish_close)
             return
-        self._shutdown()
+        self._finish_close()
 
-    def _shutdown_unless_reopened(self):
-        if self._closing:          # show_window() clears this when the user reopens the app
+    def _finish_close(self):
+        """Everything is applied: stop, or (in the tray) simply stay there."""
+        if not self._closing:          # show_window() clears this when the user reopens the app
+            return
+        if self._quit_when_done:
             self._shutdown()
+            return
+        announced = self._announced
+        self._closing = self._background = self._started_hidden = self._seen_waiting = self._announced = False
+        ui = self.cfg.setdefault("ui", {})
+        if not announced and not ui.get("tray_hint_shown"):
+            ui["tray_hint_shown"] = True
+            self.save_config()
+            self._notify("Huetooth keeps running here, so your lights react instantly. "
+                         "Right-click the icon for scenes or to quit.")
 
     def _shutdown(self):
         for job in (self._poll_job, self._tick_job, self._drag_job, self._close_job):
@@ -2076,6 +2339,9 @@ class App:
                     self.root.after_cancel(job)
                 except tk.TclError:
                     pass
+        if self.tray is not None:            # the icon disappears at once, not after the lights let go
+            self.tray.stop()
+            self.tray = None
         log.removeHandler(self._log_handler)
         if self.engine is not None:
             if self.ipc is not None:
@@ -2117,8 +2383,10 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Huetooth - Hue Bluetooth controller")
     parser.add_argument("--sim", action="store_true", help="demo with simulated lights")
     parser.add_argument("--sim-flaky", action="store_true", help="demo with badly behaving simulated lights")
+    parser.add_argument("--tray", action="store_true", help="start hidden in the notification area (tray)")
     parser.add_argument("--background", "--achtergrond", dest="background", action="store_true",
                         help="start invisibly and quit once handed-over commands are applied")
+    parser.add_argument("--no-tray", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=IPC_PORT, help=argparse.SUPPRESS)
     parser.add_argument("--config", type=Path, default=config.CONFIG_PATH, help=argparse.SUPPRESS)
     parser.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
@@ -2146,18 +2414,27 @@ def selftest() -> int:
     cfg = {"lamps": [{"id": "L1", "name": "Test light 1", "address": "AA:BB:CC:00:00:01"},
                      {"id": "L2", "name": "Test light 2", "address": "AA:BB:CC:00:00:02"}],
            "settings": dict(config.DEFAULT_SETTINGS), "scenes": [], "ui": {}}
-    args = parse_args(["--sim", "--port", str(IPC_PORT + 11)])
+    args = parse_args(["--sim", "--no-tray", "--port", str(IPC_PORT + 11)])
     root, app = build(args, cfg)
-    result = {"connected": 0}
+    result = {"connected": 0, "tray": False}
 
     def check():
         result["connected"] = sum(1 for info in app.infos.values() if info.connected)
+        # The tray icon's window, icons and menu work (checked without showing an icon).
+        icon = tray.TrayIcon(gfx.ASSETS / "app.ico", "Huetooth", on_open=lambda: None, menu=app._tray_menu,
+                             on_action=lambda action: None)
+        if icon.start(show=False):
+            menu = icon._build_menu(app._tray_menu(), {})
+            result["tray"] = bool(menu)
+            tray.user32.DestroyMenu(menu)
+        icon.stop()
         app.close()
 
     root.after(4000, check)
     root.mainloop()
-    log.info("selftest: %d demo lights connected", result["connected"])
-    return 0 if result["connected"] == 2 else 1
+    log.info("selftest: %d demo lights connected, tray icon parts %s", result["connected"],
+             "work" if result["tray"] else "FAILED")
+    return 0 if result["connected"] == 2 and result["tray"] else 1
 
 
 def build(args, cfg) -> tuple[tk.Tk, App]:
@@ -2205,14 +2482,19 @@ def main(argv=None) -> int:
             return 1
     sim = args.sim or args.sim_flaky
     if not sim and controller_running(args.port):
-        if not args.background:           # an app is already running: just show it
+        if not (args.background or args.tray):   # an app is already running: just show it
             ipc_request({"op": "show"}, port=args.port)
         return 0
 
     setup_logging(config.LOG_DIR / ("controller-sim.log" if sim else "controller.log"))
     log.info("Huetooth %s started%s", __version__,
-             " (demo)" if sim else " (background)" if args.background else "")
+             " (demo)" if sim else " (background)" if args.background else " (tray)" if args.tray else "")
     cfg = config.load_config(args.config)
+    if not sim:
+        try:
+            tray.refresh_autostart()            # Start with Windows keeps pointing at this copy
+        except OSError:
+            pass
     try:
         root, app = build(args, cfg)
     except Exception as exc:
@@ -2221,6 +2503,8 @@ def main(argv=None) -> int:
         return 1
     if args.background:
         app.start_in_background()
+    elif args.tray and cfg["lamps"]:
+        app.start_in_tray()
     else:
         app.show_window()
         if not cfg["lamps"]:

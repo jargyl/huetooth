@@ -93,7 +93,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     argv = [] if opts.real else (["--sim-flaky"] if opts.flaky else ["--sim"])
-    args = hc.parse_args(argv + ["--port", str(hc.IPC_PORT + 7)] + (["--config", opts.config] if opts.config else []))
+    args = hc.parse_args(argv + ["--no-tray", "--port", str(hc.IPC_PORT + 7)] + (["--config", opts.config] if opts.config else []))
 
     styled = hc.style_toplevel
 
@@ -172,7 +172,7 @@ def main():
 
     app.toast_factory = invisible_toast
     if opts.readme:
-        steps = readme_steps(app, cfg, shot, other_shot, toast_shot)
+        steps = readme_steps(app, cfg, shot, other_shot)
     elif opts.real and opts.observe:
         pass
     elif not opts.real:
@@ -223,16 +223,15 @@ def main():
     root.mainloop()
     if opts.readme:
         shots.append(str(compose(out, ["readme_color", "readme_scenes", "readme_queued"], "screenshot")))
-        for name, target in (("readme_find", "find-lights"), ("readme_toast", "notification")):
-            image = rounded(Image.open(out / f"{name}.png").convert("RGBA"), 8)
-            image.save(out / f"{target}.png", optimize=True)
-            shots.append(str(out / f"{target}.png"))
+        image = rounded(Image.open(out / "readme_find.png").convert("RGBA"), 8)
+        image.save(out / "find-lights.png", optimize=True)
+        shots.append(str(out / "find-lights.png"))
     print("\n".join(shots))
 
 
-def readme_steps(app, cfg, shot, other_shot, toast_shot):
-    """Pretty states for the README: two scenes, a choice waiting for a light,
-    the 'Find lights' window and the notification after closing."""
+def readme_steps(app, cfg, shot, other_shot):
+    """Pretty states for the README: two scenes, a choice waiting for a light
+    and the 'Find lights' window."""
     lamps = cfg["lamps"]
     second = lamps[1]["address"]
     red = dict(hc.colors.COLOR_PRESETS)["Red"]
@@ -273,10 +272,7 @@ def readme_steps(app, cfg, shot, other_shot, toast_shot):
         (2000, lambda: (app.select_tab("color"), unplug(True))),
         (1500, lambda: (app.select_target(lamps[1]["id"]), app.pick_xy(red))),
         (900, lambda: shot("readme_queued")),
-        (100, app.close),                          # closes with a queued choice -> notification
-        (2300, lambda: toast_shot("readme_toast")),
-        (100, lambda: unplug(False)),
-        (3000, lambda: None),
+        (100, app.quit),
     ]
 
 

@@ -31,10 +31,39 @@ def ghost(win):
     user32.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20 | 0x80 | 0x08000000)
 
 
+class FakeTray:
+    """Stands in for the tray icon (no icon appears during tests) and records
+    what the app shows there; tests call on_open / on_action like a click would."""
+
+    def __init__(self, icon_path, tooltip, on_open, menu, on_action):
+        self.tooltip, self.on_open, self.menu, self.on_action = tooltip, on_open, menu, on_action
+        self.visible, self.hwnd, self.notes, self.stopped = False, 1, [], False
+
+    def start(self, show=True):
+        self.visible = show
+        return True
+
+    def add(self):
+        self.visible = True
+        return True
+
+    def set_tooltip(self, text):
+        self.tooltip = text
+
+    def notify(self, title, text):
+        self.notes.append(text)
+        return True
+
+    def stop(self):
+        self.visible, self.stopped = False, True
+
+
 class UiTest(unittest.TestCase):
     def setUp(self):
         # Every dialog the app opens is made invisible straight away.
         self._style = hc.style_toplevel
+        self._tray_factory = hc.TRAY_FACTORY
+        hc.TRAY_FACTORY = FakeTray
 
         def invisible(win, parent, title):
             self._style(win, parent, title)
@@ -49,7 +78,7 @@ class UiTest(unittest.TestCase):
         cfg = {"lamps": [dict(l) for l in LAMPS], "settings": dict(config.DEFAULT_SETTINGS),
                "scenes": [], "ui": {}}
         args = hc.parse_args(["--sim", "--port", str(hc.IPC_PORT + 9)])
-        foreground = ctypes.windll.user32.GetForegroundWindow()
+        self.foreground = foreground = ctypes.windll.user32.GetForegroundWindow()
         self.root, self.app = hc.build(args, cfg)
         self.app.save_config = lambda: None
         self.root.geometry("+40+40")
@@ -61,9 +90,10 @@ class UiTest(unittest.TestCase):
 
     def tearDown(self):
         hc.style_toplevel = self._style
+        hc.TRAY_FACTORY = self._tray_factory
         logging.getLogger("hue").removeHandler(self.handler)
         try:
-            self.app.close()
+            self.app.quit()
         except Exception:
             pass
 
@@ -260,6 +290,7 @@ class UiTest(unittest.TestCase):
 
     def test_close_with_queued_choice_finishes_in_background(self):
         app = self.app
+        app.cfg["settings"]["close_to_tray"] = False     # "When I close the window: Quit Huetooth"
         toasts = []
 
         class FakeToast:
@@ -305,6 +336,68 @@ class UiTest(unittest.TestCase):
         self.assertFalse(self.app.engine._thread.is_alive())
         self.assertTrue(any(t.startswith("Done") for t in toasts), toasts)
         self.assertAlmostEqual(self.dev(1).state["xy"][0], red[0], places=2)
+        self.assertEqual(self.errors, [])
+
+    def test_tray_close_menu_and_quit(self):
+        app = self.app
+        tray = app.tray
+        self.assertTrue(app.tray_ready)
+        self.wait(lambda: len(app.infos) == 2 and all(i.connected for i in app.infos.values()),
+                  timeout=10, what="connected")
+        self.wait(lambda: "2 of 2 lights connected" in tray.tooltip, what="tooltip")
+
+        # The close button hides Huetooth in the tray: still running and connected.
+        app.close()
+        self.pump(0.5)
+        self.assertTrue(self.root.winfo_exists())
+        self.assertFalse(self.root.winfo_viewable())
+        self.assertFalse(app._visible())
+        self.assertTrue(app.engine._thread.is_alive())
+        self.assertEqual(len(tray.notes), 1, tray.notes)               # the one-time hint
+        self.assertIn("Right-click", tray.notes[0])
+        self.assertTrue(app.cfg["ui"]["tray_hint_shown"])
+
+        # The right-click menu works while the window is hidden.
+        labels = [item[0] for item in tray.menu() if item]
+        self.assertEqual(labels[0], "Open Huetooth")
+        self.assertIn("2 of 2 lights connected", labels)
+        scenes = next(item[1] for item in tray.menu() if item and item[0] == "Scenes")
+        tray.on_action("off")
+        self.wait(lambda: not self.dev(0).state["power"] and not self.dev(1).state["power"], what="all off")
+        gaming = next(key for name, key in scenes if name == "Gaming")
+        tray.on_action(gaming)
+        self.wait(lambda: self.dev(0).state["power"] and abs(self.dev(0).state["xy"][0] - 0.16) < 0.01
+                  and abs(self.dev(1).state["xy"][0] - 0.39) < 0.01, what="scene from the tray")
+
+        # A click on the icon brings the window back.
+        tray.on_open()
+        ctypes.windll.user32.SetForegroundWindow(self.foreground)    # (it is invisible: give focus back)
+        self.pump(0.3)
+        self.assertTrue(app._visible())
+
+        # Closing with a choice that still waits: Windows notifications, and Huetooth stays.
+        address = LAMPS[1]["address"]
+        self.dev(1).reachable = False
+        app.run_engine(lambda mgr: [link.drop() for link in mgr.transport.links(address)])
+        self.wait(lambda: not app.infos["L2"].connected, what="lamp 2 gone")
+        app.select_target("L2")
+        red = dict(colors.COLOR_PRESETS)["Red"]
+        self.click(next(s for s, xy in app.swatches if xy == red))
+        self.wait(lambda: app.infos["L2"].pending, what="queued choice")
+        app.close()
+        self.wait(lambda: any("is applied as soon as" in t for t in tray.notes), timeout=4, what="queued note")
+        self.dev(1).reachable = True
+        self.wait(lambda: any(t.startswith("Done") for t in tray.notes), timeout=15, what="done note")
+        self.assertTrue(self.root.winfo_exists())
+        self.assertFalse(app._closing)
+        self.assertAlmostEqual(self.dev(1).state["xy"][0], red[0], places=2)
+
+        # "Quit Huetooth" in the menu really stops it.
+        tray.on_action("quit")
+        with self.assertRaises(hc.tk.TclError):
+            self.root.winfo_exists()
+        self.assertTrue(tray.stopped)
+        self.assertFalse(app.engine._thread.is_alive())
         self.assertEqual(self.errors, [])
 
     def test_dialogs_scenes_and_lamp_management(self):
