@@ -213,7 +213,7 @@ async def main(argv):
     setup_logging(config.LOG_DIR / "hw_test.log")
     cfg = config.load_config()
     if not cfg["lamps"]:
-        print("No lights set up yet - add them in the Monitor Lights app first")
+        print("No lights set up yet - add them in the Huetooth app first")
         return 2
     args = argv or ["all"]
     plan = []

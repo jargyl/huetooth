@@ -48,7 +48,15 @@ def capture(widget) -> Image.Image:
     gdi32.DeleteObject(bitmap)
     gdi32.DeleteDC(memory_dc)
     user32.ReleaseDC(hwnd, window_dc)
-    return Image.frombuffer("RGB", (width, height), buffer, "raw", "BGRX", 0, 1)
+    image = Image.frombuffer("RGB", (width, height), buffer, "raw", "BGRX", 0, 1)
+    # Only the content: the invisible capture windows have a small tool-window
+    # title bar that the real app does not have.
+    corner = wt.POINT(0, 0)
+    user32.ClientToScreen(hwnd, ctypes.byref(corner))
+    client = wt.RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(client))
+    left, top = corner.x - rect.left, corner.y - rect.top
+    return image.crop((left, top, left + client.right, top + client.bottom))
 
 
 def ghost(win) -> None:
@@ -60,6 +68,15 @@ def ghost(win) -> None:
     style = user32.GetWindowLongW(hwnd, -20)
     # WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
     user32.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20 | 0x80 | 0x08000000)
+
+
+def away_from_mouse() -> str:
+    """A spot for the (invisible) window where the mouse pointer is not, so
+    no button shows its hover colour in the pictures."""
+    point = wt.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
+    width = ctypes.windll.user32.GetSystemMetrics(0)
+    return "+40+40" if point.x > 700 else f"+{max(40, width - 700)}+40"
 
 
 def main():
@@ -90,8 +107,8 @@ def main():
     root, app = hc.build(args, cfg)
     app.save_config = lambda: None          # never touch the real config from screenshots
     if opts.config:                         # pictures for the README: no "(demo)" in the title
-        app.title_label.configure(text="Monitor Lights")
-    root.geometry("+40+40")
+        app.title_label.configure(text="Huetooth")
+    root.geometry(away_from_mouse())
     foreground = ctypes.windll.user32.GetForegroundWindow()
     ghost(root)
     root.deiconify()

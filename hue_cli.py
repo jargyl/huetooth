@@ -1,8 +1,8 @@
-"""Command line for Monitor Lights (control your Hue Bluetooth lights from a terminal).
+"""Command line for Huetooth (control your Hue Bluetooth lights from a terminal).
 
-If the Monitor Lights app is open, commands go through it (instant, no new
+If the Huetooth app is open, commands go through it (instant, no new
 Bluetooth connection). Otherwise this script connects by itself, and a light
-it cannot reach in time is handed to an invisible Monitor Lights that applies
+it cannot reach in time is handed to Huetooth running invisibly, which applies
 the command as soon as the light connects.
 """
 
@@ -21,9 +21,9 @@ import hue_config as config
 from hue_engine import (EFFECTS, IPC_PORT, HueManager, LampStatus, controller_running, ipc_request,
                         setup_logging)
 
-# The ready-made download ships this as lights.exe next to "Monitor Lights.exe".
+# The ready-made download ships this as lights.exe next to "Huetooth.exe".
 FROZEN = getattr(sys, "frozen", False)
-APP_EXE = "Monitor Lights.exe"
+APP_EXE = "Huetooth.exe"
 PROG = "lights" if FROZEN else "py hue_cli.py"
 
 EXAMPLES = [
@@ -240,7 +240,7 @@ def via_app(kind, plan, cfg, args) -> int:
 
 
 def start_background_app(config_path: Path, port: int) -> None:
-    """Start Monitor Lights invisibly (no window, no console)."""
+    """Start Huetooth invisibly (no window, no console)."""
     if FROZEN:
         here = Path(sys.executable).resolve().parent
         command = [str(here / APP_EXE), "--background"]
@@ -259,7 +259,7 @@ def start_background_app(config_path: Path, port: int) -> None:
 
 
 def hand_off(commands: list[tuple[list[str], dict]], config_path: Path, port: int) -> bool:
-    """Give queued commands to (a freshly started, invisible) Monitor Lights."""
+    """Give queued commands to (a freshly started, invisible) Huetooth."""
     if not controller_running(port):
         start_background_app(config_path, port)
         deadline = time.monotonic() + 20
@@ -372,9 +372,9 @@ async def standalone(kind, plan, cfg, args) -> int:
             for (lamp_id,), _fields in leftover:
                 states[lamp_id] = "failed"
                 if not args.no_background:
-                    details[lamp_id] = "could not hand the command to Monitor Lights in the background"
+                    details[lamp_id] = "could not hand the command to Huetooth in the background"
         else:
-            print("Not every light was reachable: Monitor Lights finishes this in the background.")
+            print("Not every light was reachable: Huetooth finishes this in the background.")
     return print_results(cfg, states, timings, details)
 
 
@@ -414,7 +414,7 @@ def main(argv=None) -> int:
         pass
     if argv is None and len(sys.argv) == 1 and opened_by_double_click():
         print("lights.exe controls your lights from a terminal, a shortcut or a script.\n"
-              "Open the app itself with \"Monitor Lights.exe\".\n")
+              "Open the app itself with \"Huetooth.exe\".\n")
         print(examples_text())
         try:
             input("\nPress Enter to close.")
@@ -434,7 +434,7 @@ def main(argv=None) -> int:
     parser.add_argument("--timeout", type=float, default=None,
                         help="how long to wait for the lights (default 15 s; through the app 8 s)")
     parser.add_argument("--no-background", action="store_true",
-                        help="do not hand unreachable lights to Monitor Lights in the background")
+                        help="do not hand unreachable lights to Huetooth in the background")
     parser.add_argument("-v", "--verbose", action="store_true", help="show connection details")
     # Hidden: testing helpers and the option names of older (Dutch) versions.
     parser.add_argument("--direct", action="store_true", help=argparse.SUPPRESS)
@@ -449,7 +449,7 @@ def main(argv=None) -> int:
 
     cfg = config.load_config(args.config)
     if not cfg["lamps"] and COMMANDS.get((args.command or "").lower()) != "list":
-        print("No lights set up yet. Start the app first (Monitor Lights) and click 'Find lights'.")
+        print("No lights set up yet. Open Huetooth first and click 'Find lights'.")
         return 2
     try:
         kind, plan = build_plan(args, cfg)

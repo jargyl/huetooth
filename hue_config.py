@@ -1,8 +1,7 @@
 """Settings file: lights, settings and scenes.
 
-Stored per user in %APPDATA%\\Monitor Lights\\config.json (logs next to it),
-so the program folder stays clean and may be read-only. A config.json from
-an older version that lived next to the program is taken over once.
+Stored per user in %APPDATA%\\Huetooth\\config.json (logs next to it),
+so the program folder stays clean and may be read-only.
 """
 
 from __future__ import annotations
@@ -10,17 +9,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import sys
 from pathlib import Path
 from typing import Any
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "Monitor Lights"
+DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "Huetooth"
 CONFIG_PATH = DATA_DIR / "config.json"
 LOG_DIR = DATA_DIR / "logs"
-# Where older versions kept their settings (next to the program).
-LEGACY_PATHS = [] if getattr(sys, "frozen", False) else [BASE_DIR / "hue_config.json"]
 
 ADDRESS_RE = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
 
@@ -95,18 +89,7 @@ def _clean_lamps(raw: Any) -> list[dict[str, Any]]:
     return lamps
 
 
-def load_config(path: Path = CONFIG_PATH, legacy: list[Path] | None = None) -> dict[str, Any]:
-    if legacy is None:
-        legacy = LEGACY_PATHS if path == CONFIG_PATH else []
-    if not path.exists():
-        for old in legacy:
-            if old.exists():
-                try:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(old, path)
-                except OSError:
-                    pass
-                break
+def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     cfg = _new_config()
     data: Any = None
     if path.exists():

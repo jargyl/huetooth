@@ -1,6 +1,6 @@
-"""Monitor Lights - desktop controller for Philips Hue Bluetooth lamps.
+"""Huetooth - desktop controller for Philips Hue Bluetooth lamps.
 
-Start:  py hue_controller.py            (or double-click "Monitor Lights.pyw")
+Start:  py hue_controller.py            (or double-click "Huetooth.pyw")
         py hue_controller.py --sim      demo with simulated lamps
         py hue_controller.py --sim-flaky  demo with badly behaving lamps
 
@@ -914,7 +914,7 @@ class SettingsWindow:
                   lambda key: app.set_transition(int(key)), height=32).pack(fill="x")
 
         body = section(outer, "About")
-        note(body, f"Monitor Lights {__version__} · settings and logs in %APPDATA%\\Monitor Lights")
+        note(body, f"Huetooth {__version__} · settings and logs in %APPDATA%\\Huetooth")
         row = tk.Frame(body, bg=BG)
         row.pack(fill="x", pady=(px(8), 0))
         PillButton(row, "Help & updates", icon=ICON_WEB, command=app.open_project_page,
@@ -1057,7 +1057,7 @@ def enable_dpi_awareness():
 
 def set_app_id():
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HueControl.MonitorLights")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Huetooth.App")
     except Exception:
         pass
 
@@ -1109,7 +1109,7 @@ class Toast:
         texts = tk.Frame(body, bg=SURFACE_2)
         texts.pack(side="left")
         widgets += [texts,
-                    tk.Label(texts, text="Monitor Lights", font=F.body_bold, bg=SURFACE_2, fg=TEXT),
+                    tk.Label(texts, text="Huetooth", font=F.body_bold, bg=SURFACE_2, fg=TEXT),
                     tk.Label(texts, text=text, font=F.small, bg=SURFACE_2, fg=MUTED, justify="left",
                              wraplength=px(270))]
         widgets[-2].pack(anchor="w")
@@ -1211,7 +1211,7 @@ class App:
         header = tk.Frame(outer, bg=BG)
         header.pack(fill="x")
         header.columnconfigure(0, weight=1)
-        self.title_label = tk.Label(header, text="Monitor Lights" + ("  (demo)" if self.sim else ""),
+        self.title_label = tk.Label(header, text="Huetooth" + ("  (demo)" if self.sim else ""),
                                     font=F.title, bg=BG, fg=TEXT)
         self.title_label.grid(row=0, column=0, sticky="w")
         self.subtitle = tk.Label(header, text="Starting…", font=F.small, bg=BG, fg=MUTED)
@@ -2114,7 +2114,7 @@ def restore_position(root: tk.Tk, cfg: dict):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Monitor Lights - Hue Bluetooth controller")
+    parser = argparse.ArgumentParser(description="Huetooth - Hue Bluetooth controller")
     parser.add_argument("--sim", action="store_true", help="demo with simulated lights")
     parser.add_argument("--sim-flaky", action="store_true", help="demo with badly behaving simulated lights")
     parser.add_argument("--background", "--achtergrond", dest="background", action="store_true",
@@ -2170,7 +2170,7 @@ def build(args, cfg) -> tuple[tk.Tk, App]:
     root.withdraw()
     SCALE = root.winfo_fpixels("1i") / 96.0
     F = Fonts(root)
-    root.title("Monitor Lights")
+    root.title("Huetooth")
     root.configure(bg=BG)
     ico = gfx.ASSETS / "app.ico"
     try:
@@ -2210,14 +2210,14 @@ def main(argv=None) -> int:
         return 0
 
     setup_logging(config.LOG_DIR / ("controller-sim.log" if sim else "controller.log"))
-    log.info("Monitor Lights %s started%s", __version__,
+    log.info("Huetooth %s started%s", __version__,
              " (demo)" if sim else " (background)" if args.background else "")
     cfg = config.load_config(args.config)
     try:
         root, app = build(args, cfg)
     except Exception as exc:
         log.exception("Starting failed")
-        messagebox.showerror("Monitor Lights", f"Could not start:\n{exc}")
+        messagebox.showerror("Huetooth", f"Could not start:\n{exc}")
         return 1
     if args.background:
         app.start_in_background()

@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
 __version__ = "1.0.0"
-PROJECT_URL = "https://github.com/jargyl/monitor-lights"
+PROJECT_URL = "https://github.com/jargyl/huetooth"
 
 log = logging.getLogger("hue")
 
@@ -212,7 +212,7 @@ class LinkLost(Exception):
 
 class LampBusy(Exception):
     """Windows gives the lamp's light service to one program at a time, and
-    another program on this PC has it (for example a second Monitor Lights)."""
+    another program on this PC has it (for example a second copy of Huetooth)."""
 
 
 def describe_error(exc: BaseException) -> tuple[str, str]:
@@ -228,7 +228,7 @@ def describe_error(exc: BaseException) -> tuple[str, str]:
     if isinstance(exc, LinkLost):
         return "lost", "Connection lost"
     if isinstance(exc, LampBusy):
-        return "busy", "Another program on this PC is using the light (for example a second Monitor Lights)"
+        return "busy", "Another program on this PC is using the light (for example a second copy of Huetooth)"
     if isinstance(exc, TimeoutError):
         return "timeout", "No answer (light off, too far away or busy)"
     if isinstance(exc, BleakBluetoothNotAvailableError):
@@ -1510,7 +1510,7 @@ def controller_running(port: int = IPC_PORT) -> bool:
 
 
 def quit_controller(port: int = IPC_PORT, timeout: float = 15.0) -> bool:
-    """Ask a running Monitor Lights to quit and wait until its process is gone
+    """Ask a running Huetooth to quit and wait until its process is gone
     (used by the installer before it replaces the program files)."""
     reply = ipc_request({"op": "ping"}, port=port, reply_timeout=2.0)
     if not reply or reply.get("app") != APP_ID:

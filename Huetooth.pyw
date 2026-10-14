@@ -1,6 +1,6 @@
-"""Double-click to open Monitor Lights without a console window.
+"""Double-click to open Huetooth without a console window.
 
-Also the entry point of the ready-made "Monitor Lights.exe".
+Also the entry point of the ready-made "Huetooth.exe".
 """
 
 import os
@@ -25,7 +25,7 @@ except BaseException:
         details = ("A required package is missing. Run install.bat once (or: py -m pip install -r "
                    "requirements.txt).\n\n" + details)
     try:
-        log_dir = os.path.join(os.environ.get("APPDATA", HERE), "Monitor Lights", "logs")
+        log_dir = os.path.join(os.environ.get("APPDATA", HERE), "Huetooth", "logs")
         os.makedirs(log_dir, exist_ok=True)
         with open(os.path.join(log_dir, "startup-error.txt"), "w", encoding="utf-8") as handle:
             handle.write(details)
@@ -33,5 +33,5 @@ except BaseException:
         pass
     import ctypes
 
-    ctypes.windll.user32.MessageBoxW(None, "Monitor Lights could not start:\n\n" + details[-1500:],
-                                     "Monitor Lights", 0x10)
+    ctypes.windll.user32.MessageBoxW(None, "Huetooth could not start:\n\n" + details[-1500:],
+                                     "Huetooth", 0x10)

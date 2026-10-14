@@ -1,20 +1,20 @@
-; Inno Setup script for MonitorLights-Setup-<version>.exe
+; Inno Setup script for Huetooth-Setup-<version>.exe
 ;
 ;   iscc /DAppVersion=1.0.0 packaging\installer.iss
 ;
-; Expects the PyInstaller output in dist\Monitor Lights (see monitor_lights.spec).
-; Installs per user (no admin prompt) into %LOCALAPPDATA%\Programs\Monitor Lights.
-; Settings and logs live in %APPDATA%\Monitor Lights and are kept on uninstall.
+; Expects the PyInstaller output in dist\Huetooth (see huetooth.spec).
+; Installs per user (no admin prompt) into %LOCALAPPDATA%\Programs\Huetooth.
+; Settings and logs live in %APPDATA%\Huetooth and are kept on uninstall.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
 #ifndef DistDir
-  #define DistDir "..\dist\Monitor Lights"
+  #define DistDir "..\dist\Huetooth"
 #endif
-#define AppName "Monitor Lights"
-#define AppExe "Monitor Lights.exe"
-#define AppUrl "https://github.com/jargyl/monitor-lights"
+#define AppName "Huetooth"
+#define AppExe "Huetooth.exe"
+#define AppUrl "https://github.com/jargyl/huetooth"
 
 [Setup]
 AppId={{6F1D4C2A-8B3E-4F5A-9C7D-2E8B1A6F4D93}
@@ -37,7 +37,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\dist
-OutputBaseFilename=MonitorLights-Setup-{#AppVersion}
+OutputBaseFilename=Huetooth-Setup-{#AppVersion}
 SetupIconFile=..\assets\app.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
@@ -73,7 +73,7 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Close a running Monitor Lights first, so its files can be removed.
+; Close a running Huetooth first, so its files can be removed.
 Filename: "{app}\{#AppExe}"; Parameters: "--quit"; Flags: runhidden; RunOnceId: "QuitApp"
 
 [Code]

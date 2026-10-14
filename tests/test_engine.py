@@ -139,30 +139,34 @@ class ConfigTests(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         self.path = self.dir / "data" / "config.json"
-        self.legacy = self.dir / "hue_config.json"
 
-    def test_takes_over_old_config_once(self):
-        self.legacy.write_text(json.dumps({"lamps": [
+    def test_cleans_up_hand_edited_lights(self):
+        self.path.parent.mkdir()
+        self.path.write_text(json.dumps({"lamps": [
             {"id": "L1", "name": "Left", "address": "aa:bb:cc:dd:ee:01"},
             {"id": "L2", "name": "", "address": "AA-BB-CC-DD-EE-02"},
-            {"id": "L3", "name": "bogus", "address": "not an address"}]}))
-        cfg = config.load_config(self.path, [self.legacy])
+            {"id": "L3", "name": "duplicate", "address": "AA:BB:CC:DD:EE:01"},
+            {"id": "L4", "name": "bogus", "address": "not an address"}]}))
+        cfg = config.load_config(self.path)
         self.assertEqual([l["address"] for l in cfg["lamps"]], ["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"])
         self.assertEqual([l["name"] for l in cfg["lamps"]], ["Left", "Light 2"])
-        self.assertTrue(self.path.exists())                 # copied to the new place
-        self.legacy.write_text(json.dumps({"lamps": []}))   # later changes to the old file are ignored
-        self.assertEqual(len(config.load_config(self.path, [self.legacy])["lamps"]), 2)
+
+    def test_missing_file_gives_defaults(self):
+        cfg = config.load_config(self.path)
+        self.assertEqual(cfg["lamps"], [])
+        self.assertEqual(cfg["settings"], config.DEFAULT_SETTINGS)
+        self.assertFalse(self.path.exists())                # nothing is written until something is saved
 
     def test_roundtrip_and_corrupt(self):
-        cfg = config.load_config(self.path, [])
+        cfg = config.load_config(self.path)
         cfg["lamps"].append({"id": "L1", "name": "Left", "address": "AA:BB:CC:DD:EE:01"})
         cfg["settings"]["idle_release_minutes"] = 5
         config.save_config(cfg, self.path)
-        again = config.load_config(self.path, [])
+        again = config.load_config(self.path)
         self.assertEqual(again["lamps"][0]["name"], "Left")
         self.assertEqual(again["settings"]["idle_release_minutes"], 5)
         self.path.write_text("{ broken")
-        fresh = config.load_config(self.path, [])
+        fresh = config.load_config(self.path)
         self.assertEqual(fresh["lamps"], [])
         self.assertTrue(self.path.with_suffix(".corrupt.json").exists())
 
@@ -618,7 +622,7 @@ class IpcTests(unittest.IsolatedAsyncioTestCase):
 
 
 class QuitTests(unittest.TestCase):
-    """``Monitor Lights.exe --quit`` (used by the installer) must only return
+    """``Huetooth.exe --quit`` (used by the installer) must only return
     once the running app's process is really gone, so its files are free."""
 
     def test_quit_waits_for_the_process_to_exit(self):
