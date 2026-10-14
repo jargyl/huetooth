@@ -20,6 +20,7 @@ import sys
 import time
 import tkinter as tk
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from tkinter import colorchooser, messagebox
 from tkinter import font as tkfont
@@ -27,6 +28,7 @@ from tkinter import font as tkfont
 import hue_colors as colors
 import hue_config as config
 import hue_gfx as gfx
+import hue_schedule as schedule
 import hue_tray as tray
 from hue_engine import (
     EFFECT_NAMES, EFFECTS, IPC_PORT, EngineThread, HueManager, IpcServer, LampInfo, LampState,
@@ -69,6 +71,9 @@ ICON_STOP = ""
 ICON_FOLDER = ""
 ICON_PALETTE = ""
 ICON_WEB = ""
+ICON_EDIT = ""
+ICON_RESTORE = ""
+ICON_CLOCK = ""
 
 TRANSITIONS = [(0, "Instant"), (2, "Fast"), (4, "Normal"), (10, "Slow")]
 IDLE_CHOICES = [(0, "Never"), (5, "5 min"), (15, "15 min"), (30, "30 min"), (60, "60 min")]
@@ -1123,6 +1128,306 @@ class ScanWindow:
         self.app.run_engine(lambda mgr: mgr.pair(seen.address), done)
 
 
+class ScheduleWindow:
+    """The schedules: switch on/off, change, delete, add."""
+
+    def __init__(self, app: "App"):
+        self.app = app
+        self.win = tk.Toplevel(app.root)
+        style_toplevel(self.win, app.root, "Schedule")
+        outer = tk.Frame(self.win, bg=BG, padx=px(20), pady=px(14))
+        outer.pack(fill="both", expand=True)
+        tk.Label(outer, text="Schedule", font=F.title, bg=BG, fg=TEXT).pack(anchor="w")
+        note(outer, "Huetooth changes your lights at these times while it runs, also hidden in the tray. "
+                    "Was it closed at that time? Then it catches up when it starts, until the 'until' time.")
+        self.rows = tk.Frame(outer, bg=BG)
+        self.rows.pack(fill="x", pady=(px(12), 0))
+        footer = tk.Frame(outer, bg=BG)
+        footer.pack(fill="x", pady=(px(14), 0))
+        PillButton(footer, "Add a schedule", icon=ICON_ADD, command=self.add).pack(side="left")
+        PillButton(footer, "Close", command=self.close, width=110).pack(side="right")
+        self.win.protocol("WM_DELETE_WINDOW", self.close)
+        self.win.bind("<Escape>", lambda e: self.close())
+        self._build_rows()
+        center_on(self.win, app.root)
+
+    def _build_rows(self):
+        for child in self.rows.winfo_children():
+            child.destroy()
+        rules = self.app.cfg["schedules"]
+        if not rules:
+            note(self.rows, "No schedules yet. For example: at 22:00 every day, make the lights red.")
+        for rule in rules:
+            row = tk.Frame(self.rows, bg=SURFACE, padx=px(12), pady=px(10))
+            row.pack(fill="x", pady=(0, px(6)))
+            Toggle(row, value=rule["enabled"], bg=SURFACE,
+                   command=lambda on, r=rule: self._enable(r, on)).pack(side="left")
+            PillButton(row, "", icon=ICON_DELETE, tooltip="Delete", height=30, bg=SURFACE_2,
+                       command=lambda r=rule: self._delete(r)).pack(side="right")
+            PillButton(row, "Edit", icon=ICON_EDIT, height=30, bg=SURFACE_2, font=F.small,
+                       command=lambda r=rule: self.edit(r)).pack(side="right", padx=(0, px(6)))
+            texts = tk.Frame(row, bg=SURFACE)
+            texts.pack(side="left", fill="x", expand=True, padx=(px(12), px(8)))
+            tk.Label(texts, text=f"{rule['time']}  ·  {self.app.describe_action(rule['action'])}",
+                     font=F.body_bold, bg=SURFACE, fg=TEXT if rule["enabled"] else FAINT,
+                     anchor="w").pack(fill="x")
+            details = f"{schedule.describe_days(rule['days'])} · {self.app.describe_lights(rule['lights'])}"
+            if rule.get("until"):
+                details += f" · catches up until {rule['until']}"
+            tk.Label(texts, text=details, font=F.small, bg=SURFACE, fg=MUTED, anchor="w", justify="left",
+                     wraplength=px(260)).pack(fill="x")
+
+    def add(self):
+        fields = ScheduleEditor(self.app, self.win).run()
+        if fields:
+            self.app.cfg["schedules"].append({"id": schedule.new_id(self.app.cfg["schedules"]), "enabled": True,
+                                              "last_run": None, **fields})
+            self._changed()
+
+    def edit(self, rule):
+        fields = ScheduleEditor(self.app, self.win, rule).run()
+        if fields:
+            rule.update(fields)
+            self._changed()
+
+    def _enable(self, rule, on):
+        rule["enabled"] = on
+        self._changed()
+
+    def _delete(self, rule):
+        self.app.cfg["schedules"] = [r for r in self.app.cfg["schedules"] if r is not rule]
+        self._changed()
+
+    def _changed(self):
+        self.app.schedules_changed()
+        if self.win.winfo_exists():
+            self._build_rows()
+
+    def close(self):
+        self.app.schedule_window = None
+        self.win.destroy()
+
+
+class ScheduleEditor:
+    """Dialog for one schedule. run() returns its fields, or None when cancelled."""
+
+    def __init__(self, app: "App", parent: tk.Misc, rule: dict | None = None):
+        self.app, self.parent, self.result = app, parent, None
+        red = dict(colors.COLOR_PRESETS)["Red"]
+        base = rule or {"time": "22:00", "until": "04:00", "days": list(range(7)), "lights": "all",
+                        "action": {"type": "color", "xy": list(red), "brightness": 200}}
+        action = base["action"]
+        scenes = config.all_scenes(app.cfg)
+        self.days = set(base["days"])
+        lights = base["lights"]
+        self.lights = lights[0] if lights != "all" and len(lights) == 1 else "all"
+        # Remember a choice per kind, so switching kinds back and forth keeps it.
+        self.kind = action["type"]
+        self.scene = action.get("scene") or (scenes[0]["name"] if scenes else None)
+        self.xy = tuple(action["xy"]) if self.kind == "color" else red
+        self.mireds = action["mireds"] if self.kind == "white" else colors.kelvin_to_mireds(2700)
+        self.brightness = pct_of(action.get("brightness", 200))
+
+        self.win = win = tk.Toplevel(parent)
+        style_toplevel(win, parent, "Edit schedule" if rule else "New schedule")
+        frame = tk.Frame(win, bg=BG, padx=px(20), pady=px(16))
+        frame.pack(fill="both", expand=True)
+
+        top = tk.Frame(frame, bg=BG)
+        top.pack(fill="x")
+        tk.Label(top, text="At", font=F.h2, bg=BG, fg=TEXT).pack(side="left")
+        self.time_entry = self._time_entry(top, base["time"], F.title)
+        self.time_entry.pack(side="left", padx=(px(10), 0))
+
+        self._label(frame, "On")
+        days = tk.Frame(frame, bg=BG)
+        days.pack(fill="x")
+        self.day_buttons = []
+        for d, name in enumerate(schedule.DAYS):
+            button = PillButton(days, name, height=30, width=54, font=F.small, selected=d in self.days,
+                                command=lambda d=d: self._toggle_day(d))
+            button.pack(side="left", padx=(0, px(4)))
+            self.day_buttons.append(button)
+
+        if len(app.cfg["lamps"]) > 1:
+            self._label(frame, "Lights")
+            Segmented(frame, [("all", "All lights")] + [(l["id"], l["name"]) for l in app.cfg["lamps"]],
+                      self.lights, self._set_lights, height=32).pack(fill="x")
+
+        self._label(frame, "Do")
+        self.kinds = Segmented(frame, [("scene", "Scene"), ("color", "Color"), ("white", "White"), ("off", "Turn off")],
+                               self.kind, self._set_kind, height=32)
+        self.kinds.pack(fill="x")
+        self.panel = tk.Frame(frame, bg=BG)
+        self.panel.pack(fill="x", pady=(px(8), 0))
+
+        catch = tk.Frame(frame, bg=BG)
+        catch.pack(fill="x", pady=(px(16), 0))
+        self.catch_toggle = Toggle(catch, value=bool(base.get("until")), command=self._catch_changed)
+        self.catch_toggle.pack(side="left")
+        tk.Label(catch, text="If Huetooth starts later, still do it until", font=F.body, bg=BG,
+                 fg=TEXT).pack(side="left", padx=(px(10), px(8)))
+        self.until_entry = self._time_entry(catch, base.get("until") or self._later(base["time"], 6), F.body)
+        self.until_entry.pack(side="left")
+        self._catch_changed(self.catch_toggle.value)
+
+        self.error = tk.Label(frame, text="", font=F.small, bg=BG, fg=RED, anchor="w")
+        self.error.pack(fill="x", pady=(px(8), 0))
+        buttons = tk.Frame(frame, bg=BG)
+        buttons.pack(fill="x", pady=(px(8), 0))
+        PillButton(buttons, "Cancel", command=win.destroy, width=100).pack(side="right")
+        self.save_button = PillButton(buttons, "Save", command=self.save, width=100, bg=ACCENT_DIM, hover=SURFACE_4)
+        self.save_button.pack(side="right", padx=(0, px(8)))
+        win.bind("<Return>", lambda e: self.save())
+        win.bind("<Escape>", lambda e: win.destroy())
+        self._render_panel()
+        center_on(win, parent)
+        app.schedule_editor = self           # lets tests fill it in
+
+    def run(self):
+        self.win.grab_set()
+        self.parent.wait_window(self.win)
+        self.app.schedule_editor = None
+        return self.result
+
+    # -- parts ---------------------------------------------------------------------------
+
+    @staticmethod
+    def _label(master, text):
+        tk.Label(master, text=text, font=F.small, bg=BG, fg=MUTED).pack(anchor="w", pady=(px(14), px(6)))
+
+    @staticmethod
+    def _time_entry(master, value, font):
+        entry = tk.Entry(master, font=font, bg=SURFACE_2, fg=TEXT, insertbackground=TEXT, relief="flat",
+                         highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT, width=6,
+                         justify="center", disabledbackground=SURFACE, disabledforeground=FAINT)
+        entry.insert(0, value)
+        return entry
+
+    @staticmethod
+    def _later(hhmm: str, hours: int) -> str:
+        h, m = (int(v) for v in hhmm.split(":"))
+        return f"{(h + hours) % 24:02d}:{m:02d}"
+
+    def _render_panel(self):
+        for child in self.panel.winfo_children():
+            child.destroy()
+        self.scene_buttons, self.swatches, self.white_buttons = {}, [], []
+        if self.kind == "scene":
+            scenes = config.all_scenes(self.app.cfg)
+            if self.scene and not any(s["name"] == self.scene for s in scenes):
+                note(self.panel, f"The scene '{self.scene}' was deleted; pick another one.", AMBER)
+            grid = tk.Frame(self.panel, bg=BG)
+            grid.pack(fill="x")
+            grid.columnconfigure((0, 1, 2), weight=1, uniform="scenes")
+            for i, scene in enumerate(scenes):
+                button = PillButton(grid, scene["name"], height=32, font=F.small, selected=scene["name"] == self.scene,
+                                    command=lambda n=scene["name"]: self._pick_scene(n))
+                button.grid(row=i // 3, column=i % 3, sticky="ew", padx=px(2), pady=px(2))
+                self.scene_buttons[scene["name"]] = button
+            if not scenes:
+                note(self.panel, "No scenes yet: save one in the Scenes tab first.")
+        elif self.kind == "color":
+            grid = tk.Frame(self.panel, bg=BG)
+            grid.pack(anchor="w")
+            for i, (name, xy) in enumerate(colors.COLOR_PRESETS):
+                swatch = Swatch(grid, colors.to_hex(colors.xy_to_rgb(*xy)), lambda xy=xy: self._pick_xy(xy),
+                                size=36, tooltip=name)
+                swatch.grid(row=i // 6, column=i % 6, padx=px(1), pady=px(1))
+                swatch.set_selected(self._same_xy(xy, self.xy))
+                self.swatches.append((swatch, xy))
+            self._brightness_row()
+        elif self.kind == "white":
+            grid = tk.Frame(self.panel, bg=BG)
+            grid.pack(fill="x")
+            grid.columnconfigure((0, 1, 2), weight=1, uniform="whites")
+            for i, (label, kelvin) in enumerate(colors.WHITE_PRESETS):
+                mireds = colors.kelvin_to_mireds(kelvin)
+                button = PillButton(grid, label, dot=colors.to_hex(colors.kelvin_to_rgb(kelvin)), height=32,
+                                    font=F.small, selected=mireds == self.mireds, tooltip=f"{kelvin} K",
+                                    command=lambda m=mireds: self._pick_white(m))
+                button.grid(row=i // 3, column=i % 3, sticky="ew", padx=px(2), pady=px(2))
+                self.white_buttons.append((button, mireds))
+            self._brightness_row()
+        else:
+            note(self.panel, "Turns the lights off.")
+
+    def _brightness_row(self):
+        row = tk.Frame(self.panel, bg=BG)
+        row.pack(fill="x", pady=(px(10), 0))
+        tk.Label(row, text="Brightness", font=F.small, bg=BG, fg=MUTED).pack(side="left")
+        self.bri_label = tk.Label(row, text=f"{self.brightness}%", font=F.small, bg=BG, fg=TEXT)
+        self.bri_label.pack(side="right")
+        Slider(self.panel, from_=1, to=100, value=self.brightness, on_change=self._set_brightness,
+               height=30).pack(fill="x")
+
+    @staticmethod
+    def _same_xy(a, b) -> bool:
+        return abs(a[0] - b[0]) < 0.005 and abs(a[1] - b[1]) < 0.005
+
+    # -- choices -------------------------------------------------------------------------
+
+    def _toggle_day(self, day):
+        self.days ^= {day}
+        self.day_buttons[day].set_selected(day in self.days)
+
+    def _set_lights(self, key):
+        self.lights = key
+
+    def _set_kind(self, kind):
+        self.kind = kind
+        self.kinds.set(kind)
+        self._render_panel()
+
+    def _pick_scene(self, name):
+        self.scene = name
+        for scene_name, button in self.scene_buttons.items():
+            button.set_selected(scene_name == name)
+
+    def _pick_xy(self, xy):
+        self.xy = tuple(xy)
+        for swatch, preset in self.swatches:
+            swatch.set_selected(self._same_xy(preset, self.xy))
+
+    def _pick_white(self, mireds):
+        self.mireds = mireds
+        for button, preset in self.white_buttons:
+            button.set_selected(preset == mireds)
+
+    def _set_brightness(self, value, final=True):
+        self.brightness = int(round(value))
+        self.bri_label.configure(text=f"{self.brightness}%")
+
+    def _catch_changed(self, on):
+        self.until_entry.configure(state="normal" if on else "disabled")
+
+    def save(self):
+        time = schedule.parse_time(self.time_entry.get())
+        if not time:
+            self.error.configure(text="Type a time like 22:00.")
+            return
+        until = None
+        if self.catch_toggle.value:
+            until = schedule.parse_time(self.until_entry.get())
+            if not until or until == time:
+                self.error.configure(text="Type the 'until' time like 04:00 (not the same as the start time).")
+                return
+        if not self.days:
+            self.error.configure(text="Pick at least one day.")
+            return
+        if self.kind == "scene" and not any(s["name"] == self.scene for s in config.all_scenes(self.app.cfg)):
+            self.error.configure(text="Pick a scene.")
+            return
+        bri = bri_of(self.brightness)
+        action = {"scene": {"type": "scene", "scene": self.scene},
+                  "color": {"type": "color", "xy": list(self.xy), "brightness": bri},
+                  "white": {"type": "white", "mireds": self.mireds, "brightness": bri},
+                  "off": {"type": "off"}}[self.kind]
+        self.result = {"time": time, "until": until, "days": sorted(self.days),
+                       "lights": "all" if self.lights == "all" else [self.lights], "action": action}
+        self.win.destroy()
+
+
 # ---------------------------------------------------------------------------
 # Windows niceties
 # ---------------------------------------------------------------------------
@@ -1272,6 +1577,8 @@ class QueueLogHandler(logging.Handler):
 class App:
     def __init__(self, root: tk.Tk, cfg: dict, args):
         self.root, self.cfg, self.args = root, cfg, args
+        cfg.setdefault("schedules", [])
+        cfg.setdefault("hidden_scenes", [])
         self.sim = args.sim or args.sim_flaky
         self.events: queue.Queue = queue.Queue()
         self.infos: dict[str, LampInfo] = {}
@@ -1279,6 +1586,7 @@ class App:
         self.target = ui.get("target", "all")
         self.tab = ui.get("tab", "color")
         self.log_open = bool(ui.get("log_open", False))
+        self.scene_edit = False          # Scenes tab shows delete buttons
         self._quiet_until = 0.0     # don't overwrite controls with lamp reports before this
         self._drag_fields = None
         self._drag_job = None
@@ -1305,9 +1613,13 @@ class App:
 
         self._log_handler = QueueLogHandler(self.events)
         log.addHandler(self._log_handler)
+        self.now = datetime.now          # the clock schedules go by (tests set their own)
+        self._schedule_job = None
+        self.schedule_window = None
         self._build()
         self._start_engine()
         self._start_tray()
+        self._schedule_tick()             # catches up on a schedule that was due while closed
         self._poll_job = self.root.after(40, self._poll)
         self._tick_job = self.root.after(500, self._tick)
         self.root.bind("<Map>", self._on_map, add="+")
@@ -1370,6 +1682,75 @@ class App:
         if self.tray is not None:
             self.tray.set_tooltip(f"Huetooth\n{status}")
 
+    # -- schedules -----------------------------------------------------------------------
+
+    def _schedule_tick(self):
+        """Apply what is due, then sleep until the next schedule (at most a minute, so a
+        PC that slept or a changed clock is noticed soon)."""
+        self._schedule_job = None
+        now = self.now()
+        for rule in self.cfg["schedules"]:
+            moment = schedule.due(rule, now)
+            if moment is not None:
+                self._run_schedule(rule, moment)
+        wait = schedule.seconds_until_next(self.cfg["schedules"], now)
+        delay = 60.0 if wait is None else max(1.0, min(60.0, wait + 0.5))
+        self._schedule_job = self.root.after(int(delay * 1000), self._schedule_tick)
+
+    def _run_schedule(self, rule, moment):
+        rule["last_run"] = moment.strftime(schedule.STAMP)        # once per occurrence, also after a restart
+        self.save_config()
+        all_ids = [l["id"] for l in self.cfg["lamps"]]
+        ids = all_ids if rule["lights"] == "all" else [i for i in rule["lights"] if i in all_ids]
+        action = rule["action"]
+        if not ids:
+            return
+        if action["type"] == "scene":
+            scene = config.find_scene(self.cfg, action["scene"])
+            if scene is None:
+                log.warning("Schedule %s: the scene '%s' no longer exists", rule["time"], action["scene"])
+                return
+            self.apply_scene(scene, ids=ids)
+        else:
+            self.send(ids, **schedule.action_fields(action))
+        late = (self.now() - moment).total_seconds() > 90
+        log.info("Schedule %s%s: %s for %s", rule["time"], " (caught up)" if late else "",
+                 self.describe_action(action), self.describe_lights(rule["lights"]))
+
+    def schedules_changed(self):
+        """After a change in the Schedule window: save, and apply at once if one is due."""
+        self.save_config()
+        if self._schedule_job is not None:
+            self.root.after_cancel(self._schedule_job)
+        self._schedule_tick()
+
+    def describe_action(self, action) -> str:
+        kind = action["type"]
+        if kind == "off":
+            return "Off"
+        if kind == "scene":
+            missing = config.find_scene(self.cfg, action["scene"]) is None
+            return action["scene"] + (" (deleted scene)" if missing else "")
+        pct = f"{pct_of(action.get('brightness', 200))}%"
+        if kind == "color":
+            name = next((n for n, xy in colors.COLOR_PRESETS
+                         if abs(xy[0] - action["xy"][0]) < 0.005 and abs(xy[1] - action["xy"][1]) < 0.005), "Color")
+            return f"{name} · {pct}"
+        kelvin = colors.mireds_to_kelvin(action["mireds"])
+        name = next((n for n, k in colors.WHITE_PRESETS if abs(k - kelvin) < 60), "White")
+        return f"{name} ({kelvin} K) · {pct}"
+
+    def describe_lights(self, lights) -> str:
+        if lights == "all" or len(self.cfg["lamps"]) < 2:
+            return "all lights"
+        return " and ".join(self._lamp_name(i) for i in lights)
+
+    def open_schedule(self):
+        if self.schedule_window is not None and self.schedule_window.win.winfo_exists():
+            self.schedule_window.win.lift()
+            return
+        self.schedule_window = ScheduleWindow(self)
+
     # -- layout ------------------------------------------------------------------
 
     def _build(self):
@@ -1389,8 +1770,10 @@ class App:
         self.subtitle.grid(row=1, column=0, sticky="w")
         buttons = tk.Frame(header, bg=BG)
         buttons.grid(row=0, column=1, rowspan=2, sticky="e")
+        PillButton(buttons, icon=ICON_CLOCK, command=self.open_schedule, height=36, bg=BG,
+                   hover=SURFACE_2, tooltip="Schedule").pack(side="left")
         PillButton(buttons, icon=ICON_REFRESH, command=lambda: self.reconnect(None), height=36,
-                   bg=BG, hover=SURFACE_2, tooltip="Reconnect (Ctrl+R)").pack(side="left")
+                   bg=BG, hover=SURFACE_2, tooltip="Reconnect (Ctrl+R)").pack(side="left", padx=(px(4), 0))
         PillButton(buttons, icon=ICON_SETTINGS, command=self.open_settings, height=36, bg=BG,
                    hover=SURFACE_2, tooltip="Settings").pack(side="left", padx=(px(4), 0))
 
@@ -1555,23 +1938,49 @@ class App:
         grid.columnconfigure((0, 1), weight=1, uniform="scene")
         lamp_ids = [l["id"] for l in self.cfg["lamps"]] or ["L1", "L2"]
         scenes = config.all_scenes(self.cfg)
-        builtin = len(config.BUILTIN_SCENES)
+        self.scene_buttons = []
         for i, scene in enumerate(scenes):
-            # One dot per light, in the colour that light gets.
-            per_lamp = config.scene_fields(scene, lamp_ids[:2])
-            dots = [SURFACE_4 if f.get("power") is False else colors.to_hex(colors.state_to_rgb(f))
-                    for f in per_lamp.values()]
-            button = PillButton(grid, scene["name"], dots=dots, height=36,
-                                command=lambda s=scene: self.apply_scene(s))
+            if self.scene_edit:
+                button = PillButton(grid, scene["name"], icon=ICON_DELETE, icon_color=RED, height=36,
+                                    command=lambda s=scene: self.delete_scene(s))
+            else:
+                # One dot per light, in the colour that light gets.
+                per_lamp = config.scene_fields(scene, lamp_ids[:2])
+                dots = [SURFACE_4 if f.get("power") is False else colors.to_hex(colors.state_to_rgb(f))
+                        for f in per_lamp.values()]
+                button = PillButton(grid, scene["name"], dots=dots, height=36,
+                                    command=lambda s=scene: self.apply_scene(s))
+                button.bind("<Button-3>", lambda e, s=scene: self._scene_menu(e, s))
             button.grid(row=i // 2, column=i % 2, sticky="ew", padx=px(3), pady=px(3))
             button.bind("<MouseWheel>", self._scroll_scenes)
-            if i >= builtin:
-                button.bind("<Button-3>", lambda e, s=scene: self._scene_menu(e, s))
-                Tooltip(button, "Right-click to delete")
-        add = PillButton(grid, "Save current state", icon=ICON_ADD, height=36, bg=SURFACE,
-                         hover=SURFACE_3, command=self.save_scene)
-        add.grid(row=len(scenes) // 2 + 1, column=0, columnspan=2, sticky="ew", padx=px(3), pady=(px(8), px(3)))
-        add.bind("<MouseWheel>", self._scroll_scenes)
+            self.scene_buttons.append(button)
+        bottom = tk.Frame(grid, bg=SURFACE)
+        bottom.grid(row=(len(scenes) + 1) // 2, column=0, columnspan=2, sticky="ew", pady=(px(8), px(3)))
+        if self.scene_edit:
+            if self.cfg["hidden_scenes"]:
+                self.restore_button = PillButton(bottom, "Restore default scenes", icon=ICON_RESTORE, height=36,
+                                                 bg=SURFACE, hover=SURFACE_3, command=self.restore_scenes)
+                self.restore_button.pack(side="left", padx=px(3))
+            self.edit_button = PillButton(bottom, "Done", height=36, width=110, bg=ACCENT_DIM, hover=SURFACE_4,
+                                          command=lambda: self.set_scene_edit(False))
+        else:
+            add = PillButton(bottom, "Save current state", icon=ICON_ADD, height=36, bg=SURFACE,
+                             hover=SURFACE_3, command=self.save_scene)
+            add.pack(side="left", fill="x", expand=True, padx=px(3))
+            add.bind("<MouseWheel>", self._scroll_scenes)
+            self.edit_button = PillButton(bottom, "Edit", icon=ICON_EDIT, height=36, bg=SURFACE, hover=SURFACE_3,
+                                          tooltip="Delete scenes", command=lambda: self.set_scene_edit(True))
+        self.edit_button.pack(side="right", padx=px(3))
+        bottom.bind("<MouseWheel>", self._scroll_scenes)
+
+    def set_scene_edit(self, on: bool):
+        self.scene_edit = on
+        self._render_scenes()
+
+    def restore_scenes(self):
+        self.cfg["hidden_scenes"] = []
+        self.save_config()
+        self._render_scenes()
 
     def _scene_menu(self, e, scene):
         menu = tk.Menu(self.root, tearoff=0, bg=SURFACE_2, fg=TEXT, activebackground=ACCENT_DIM,
@@ -1827,8 +2236,24 @@ class App:
         self._render_scenes()
         log.info("Scene '%s' saved", name)
 
-    def delete_scene(self, scene):
-        self.cfg["scenes"] = [s for s in self.cfg["scenes"] if s is not scene]
+    def delete_scene(self, scene, ask=True):
+        """Built-in scenes are only hidden ('Restore default scenes' brings them back);
+        your own scenes are gone for good, so those are confirmed first."""
+        name = scene["name"]
+        if config.is_builtin(scene):
+            if name not in self.cfg["hidden_scenes"]:
+                self.cfg["hidden_scenes"].append(name)
+        else:
+            used = [r["time"] for r in self.cfg["schedules"]
+                    if r["action"].get("type") == "scene" and r["action"].get("scene") == name]
+            text = f"Delete the scene '{name}'?"
+            if used:
+                text += (f"\n\nThe schedule at {', '.join(used)} uses it; that schedule does nothing "
+                         f"until you pick another scene for it.")
+            if ask and not messagebox.askyesno("Delete scene", text, parent=self.root):
+                return
+            self.cfg["scenes"] = [s for s in self.cfg["scenes"] if s is not scene]
+        log.info("Scene '%s' deleted", name)
         self.save_config()
         self._render_scenes()
 
@@ -2333,7 +2758,7 @@ class App:
                          "Right-click the icon for scenes or to quit.")
 
     def _shutdown(self):
-        for job in (self._poll_job, self._tick_job, self._drag_job, self._close_job):
+        for job in (self._poll_job, self._tick_job, self._drag_job, self._close_job, self._schedule_job):
             if job is not None:
                 try:
                     self.root.after_cancel(job)

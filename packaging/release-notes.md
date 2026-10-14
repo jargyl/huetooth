@@ -1,11 +1,9 @@
-## What's new in 1.1
+## What's new in 1.2
 
-- **Huetooth lives next to the clock.** Closing the window keeps it in the notification area (tray), still connected, so your lights react instantly. Click the icon to open it; right-click for *Turn all on/off*, *Scenes* and *Quit*.
-- **Start with Windows** (Settings), straight into the tray.
-- **Even lighter in the background:** well under 0.1% of one CPU core while hidden, and notifications wait while a game runs full screen.
-- Settings fit on smaller screens (they scroll when needed).
+- **Schedules.** Click the clock at the top: "at 22:00 every day, make the lights red". They run while Huetooth runs (also hidden in the tray), and if it was closed at that time it catches up when it starts, until a time you choose. Each schedule runs once per day, so changing your lights afterwards sticks.
+- **Delete scenes.** Scenes tab → **Edit**: delete any scene, the built-in ones too. **Restore default scenes** brings those back.
 
-Prefer the old behaviour? Settings → *When I close the window* → *Quit Huetooth*.
+Earlier (1.1): Huetooth lives in the notification area (tray), *Start with Windows*, and it's even lighter in the background.
 
 ## Install
 
@@ -15,4 +13,4 @@ Prefer the old behaviour? Settings → *When I close the window* → *Quit Hueto
 
 No admin rights and no Python needed. Prefer no installer? Download the **portable zip**, extract it and run `Huetooth.exe`.
 
-Updating: just run the new setup. Your lights and settings are kept.
+Updating: just run the new setup. Your lights, scenes, schedules and settings are kept.

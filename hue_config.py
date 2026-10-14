@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import hue_schedule as schedule
+
 DATA_DIR = Path(os.environ.get("APPDATA") or Path.home()) / "Huetooth"
 CONFIG_PATH = DATA_DIR / "config.json"
 LOG_DIR = DATA_DIR / "logs"
@@ -56,7 +58,8 @@ SCENE_ALIASES = {"paars": "purple", "avond": "evening", "film": "movie", "gamen"
 
 
 def _new_config() -> dict[str, Any]:
-    return {"lamps": [], "settings": dict(DEFAULT_SETTINGS), "scenes": [], "ui": {}}
+    return {"lamps": [], "settings": dict(DEFAULT_SETTINGS), "scenes": [], "hidden_scenes": [],
+            "schedules": [], "ui": {}}
 
 
 def normalise_address(address: str) -> str | None:
@@ -113,6 +116,11 @@ def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
         if isinstance(scenes, list):
             cfg["scenes"] = [s for s in scenes if isinstance(s, dict) and s.get("name")
                              and isinstance(s.get("states"), (list, dict))]
+        hidden = data.get("hidden_scenes")
+        if isinstance(hidden, list):
+            builtin = {s["name"] for s in BUILTIN_SCENES}
+            cfg["hidden_scenes"] = [n for n in hidden if n in builtin]
+        cfg["schedules"] = schedule.clean(data.get("schedules"))
         if isinstance(data.get("ui"), dict):
             cfg["ui"] = data["ui"]
     return cfg
@@ -131,13 +139,21 @@ def lamp_specs(cfg: dict[str, Any]) -> list[tuple[str, str, str]]:
 
 
 def all_scenes(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    return BUILTIN_SCENES + list(cfg.get("scenes", []))
+    """The scenes to show: built-ins the user didn't delete, then their own."""
+    hidden = set(cfg.get("hidden_scenes", []))
+    return [s for s in BUILTIN_SCENES if s["name"] not in hidden] + list(cfg.get("scenes", []))
+
+
+def is_builtin(scene: dict[str, Any]) -> bool:
+    return any(scene is s for s in BUILTIN_SCENES)
 
 
 def find_scene(cfg: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """By name, ignoring case. User scenes win; deleted built-ins still count here,
+    so command lines and the default scene keep working."""
     wanted = name.strip().lower()
     wanted = SCENE_ALIASES.get(wanted, wanted)
-    for scene in reversed(all_scenes(cfg)):   # user scenes win over built-ins
+    for scene in reversed(BUILTIN_SCENES + list(cfg.get("scenes", []))):
         if scene["name"].lower() == wanted:
             return scene
     return None

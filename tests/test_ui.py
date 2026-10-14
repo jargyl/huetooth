@@ -400,6 +400,123 @@ class UiTest(unittest.TestCase):
         self.assertFalse(app.engine._thread.is_alive())
         self.assertEqual(self.errors, [])
 
+    def test_delete_and_restore_scenes(self):
+        app = self.app
+        self.tab("scenes")
+        self.click(app.edit_button)                                   # Edit: every scene gets a delete button
+        self.assertTrue(app.scene_edit)
+        movie = next(b for b in app.scene_buttons if b.text == "Movie")
+        self.click(movie)                                             # a built-in scene: hidden, no question
+        self.assertEqual(app.cfg["hidden_scenes"], ["Movie"])
+        self.assertNotIn("Movie", [b.text for b in app.scene_buttons])
+        tray_scenes = next(item[1] for item in app._tray_menu() if item and item[0] == "Scenes")
+        self.assertNotIn("Movie", [name for name, _ in tray_scenes])
+
+        # One of your own scenes is confirmed first, then gone for good.
+        app.cfg["scenes"].append({"name": "Mine", "states": [{"power": True, "brightness": 100}]})
+        app._render_scenes()
+        asked = []
+        original = hc.messagebox.askyesno
+        hc.messagebox.askyesno = lambda *a, **kw: asked.append(a) or True
+        try:
+            self.click(next(b for b in app.scene_buttons if b.text == "Mine"))
+        finally:
+            hc.messagebox.askyesno = original
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(app.cfg["scenes"], [])
+
+        self.click(app.restore_button)                                # built-ins come back
+        self.assertEqual(app.cfg["hidden_scenes"], [])
+        self.assertIn("Movie", [b.text for b in app.scene_buttons])
+        self.click(app.edit_button)                                   # Done
+        self.assertFalse(app.scene_edit)
+        self.click(next(b for b in app.scene_buttons if b.text == "Movie"))   # applies again
+        self.wait(lambda: self.dev(0).state["mireds"] == 455, what="Movie scene applied")
+        self.assertEqual(self.errors, [])
+
+    def fill_schedule_editor(self, fill):
+        """Run *fill(editor)* on the next schedule editor (it is modal), then click Save."""
+        deadline = time.monotonic() + 10
+
+        def attempt():
+            editor = getattr(self.app, "schedule_editor", None)
+            if editor is None:
+                if time.monotonic() < deadline:
+                    self.root.after(50, attempt)
+                return
+            fill(editor)
+            self.click(editor.save_button)
+
+        self.root.after(100, attempt)
+
+    def test_schedule_runs_catches_up_and_respects_changes(self):
+        app = self.app
+        red = dict(colors.COLOR_PRESETS)["Red"]
+        blue = dict(colors.COLOR_PRESETS)["Blue"]
+        clock = {"now": hc.datetime(2026, 10, 14, 21, 0)}
+        app.now = lambda: clock["now"]
+        self.wait(lambda: len(app.infos) == 2 and all(i.connected for i in app.infos.values()),
+                  timeout=10, what="connected")
+
+        def tick(when):
+            clock["now"] = when
+            app._schedule_tick()
+            self.pump(0.6)
+
+        # Create "22:00 every day, red, catch up until 04:00" in the editor.
+        app.open_schedule()
+        window = app.schedule_window
+
+        def make_red(editor):
+            editor.time_entry.delete(0, "end")
+            editor.time_entry.insert(0, "22.00")
+            editor._pick_xy(red)
+
+        self.fill_schedule_editor(make_red)
+        window.add()
+        rule = app.cfg["schedules"][0]
+        self.assertEqual((rule["time"], rule["until"], rule["lights"], rule["action"]["type"]),
+                         ("22:00", "04:00", "all", "color"))
+        self.assertAlmostEqual(self.dev(0).state["xy"][0], 0.3, places=2)    # 21:00: nothing yet
+
+        tick(hc.datetime(2026, 10, 14, 22, 0, 5))                           # its time comes while running
+        self.wait(lambda: abs(self.dev(0).state["xy"][0] - red[0]) < 0.01 and
+                  abs(self.dev(1).state["xy"][0] - red[0]) < 0.01, what="red at 22:00")
+        self.assertEqual(rule["last_run"], "2026-10-14T22:00")
+
+        app.run_engine(lambda mgr: mgr.command(None, xy=blue))              # changed by hand afterwards...
+        self.wait(lambda: abs(self.dev(0).state["xy"][0] - blue[0]) < 0.01, what="blue by hand")
+        tick(hc.datetime(2026, 10, 14, 22, 30))                             # ...and that sticks
+        self.assertAlmostEqual(self.dev(0).state["xy"][0], blue[0], places=2)
+
+        tick(hc.datetime(2026, 10, 15, 23, 30))   # next evening the app was closed at 22:00: catches up
+        self.wait(lambda: abs(self.dev(0).state["xy"][0] - red[0]) < 0.01, what="caught up")
+        app.run_engine(lambda mgr: mgr.command(None, xy=blue))
+        self.wait(lambda: abs(self.dev(0).state["xy"][0] - blue[0]) < 0.01, what="blue again")
+        tick(hc.datetime(2026, 10, 17, 5, 0))                               # opened after 'until': nothing
+        self.assertAlmostEqual(self.dev(0).state["xy"][0], blue[0], places=2)
+
+        # Change it: only light 2, turn off.
+        def make_off(editor):
+            editor._set_lights("L2")
+            editor._set_kind("off")
+
+        self.fill_schedule_editor(make_off)
+        window.edit(rule)
+        self.assertEqual((rule["lights"], rule["action"]), (["L2"], {"type": "off"}))
+        tick(hc.datetime(2026, 10, 17, 22, 0, 2))
+        self.wait(lambda: self.dev(1).state["power"] is False, what="light 2 off")
+        self.assertTrue(self.dev(0).state["power"])
+
+        window._enable(rule, False)                                         # switched off: nothing happens
+        self.dev(1).state["power"] = True
+        tick(hc.datetime(2026, 10, 18, 22, 0, 2))
+        self.assertTrue(self.dev(1).state["power"])
+        window._delete(rule)
+        self.assertEqual(app.cfg["schedules"], [])
+        window.close()
+        self.assertEqual(self.errors, [])
+
     def test_dialogs_scenes_and_lamp_management(self):
         app = self.app
         self.wait(lambda: len(app.infos) == 2 and all(i.connected for i in app.infos.values()),
@@ -425,7 +542,7 @@ class UiTest(unittest.TestCase):
         self.wait(lambda: self.dev(0).state["brightness"] == 40 and self.dev(1).state["mireds"] == 300
                   and self.dev(0).state["power"] and self.dev(1).state["power"], what="scene restored")
 
-        app.delete_scene(app.cfg["scenes"][0])
+        app.delete_scene(app.cfg["scenes"][0], ask=False)
         self.assertEqual(app.cfg["scenes"], [])
 
         # Rename a lamp through the dialog.

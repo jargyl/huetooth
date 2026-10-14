@@ -38,7 +38,7 @@ jobs:
           }
 
       - name: Unit tests
-        run: python -m unittest tests.test_engine tests.test_tray -v
+        run: python -m unittest tests.test_engine tests.test_tray tests.test_schedule -v
 
       - name: Build the app
         run: python -m PyInstaller packaging/huetooth.spec --noconfirm

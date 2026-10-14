@@ -20,6 +20,7 @@ Fast, reliable, and no Hue Bridge needed.
 - **Doesn't give up.** Light switched off at the wall, out of range, Windows busy? It reconnects by itself.
 - **Set it and forget it.** Pick a color while a light is still unreachable: it is applied the moment the light is back, even if you already closed the window.
 - **Lives next to the clock.** Close the window and Huetooth stays in the notification area. Right-click its icon to turn everything on or off or pick a scene. It uses almost no CPU there, so it's fine to leave running while you game.
+- **Schedules.** "At 22:00 every day, make the lights red." Missed it because the PC was off? Huetooth catches up when it starts.
 - **Command line.** `lights color red`, `lights scene Evening`… for shortcuts, scripts and Stream Deck.
 - No account, no cloud, nothing to sign in to.
 
@@ -51,6 +52,7 @@ Lights that are already paired with Windows connect straight away. To see which 
 - Keyboard: <kbd>Space</kbd> on/off, <kbd>1</kbd> / <kbd>2</kbd> / <kbd>B</kbd> choose the light, <kbd>↑</kbd> <kbd>↓</kbd> brightness.
 - Close the window when you're done: Huetooth keeps running in the notification area (next to the clock), still connected, so your lights react instantly. Click its icon to open the window again. Right-click it for **Turn all on/off**, **Scenes** and **Quit Huetooth**.
 - A choice for a light that is still unreachable is applied as soon as the light is back, and Windows lets you know with a notification.
+- Scenes: **Save current state** makes your own. **Edit** lets you delete any scene, the built-in ones too; **Restore default scenes** brings those back.
 
 **Tips**
 
@@ -59,6 +61,16 @@ Lights that are already paired with Windows connect straight away. To see which 
 - Prefer the close button to quit the app? **Settings → When I close the window → Quit Huetooth**.
 
 **Gaming:** in the tray Huetooth uses well under 0.1% of one CPU core, nothing on the GPU, and Bluetooth only for a tiny check every 45 seconds. Notifications wait while a game runs full screen. If you play with a Bluetooth headset or controller on the same adapter and ever notice hiccups, set **Settings → Release the lights after inactivity**.
+
+## Schedules
+
+Click the **clock** at the top of the window to add one: a time, the days, which lights, and what to do (a scene, a color, a white, or off).
+
+<img src="docs/schedule.png" width="470" alt="The Schedule window with a schedule at 22:00">
+
+- A schedule runs while Huetooth runs, also when it's hidden in the tray. With **Start with Windows** switched on, that's whenever your PC is on.
+- Was Huetooth closed at that time? Then it catches up when it starts, until the time you set under *If Huetooth starts later, still do it until* (for example 04:00).
+- Every schedule runs once per day it's set for. Change your lights afterwards and they stay that way.
 
 ## Command line (optional)
 
