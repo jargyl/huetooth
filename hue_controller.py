@@ -707,9 +707,48 @@ class Banner(tk.Frame):
         self.key = None
 
 
+def key_hint(lights: int) -> str:
+    if lights < 2:
+        return "Space on/off · ↑↓ brightness"
+    pick = "1/2/B" if lights == 2 else f"1–{min(lights, 9)}/B"
+    return f"Space on/off · {pick} select · ↑↓ brightness"
+
+
+class LightPicker(PillButton):
+    """'All lights ▾' with a menu of every light: used instead of the tabs when
+    there are more lights than fit side by side."""
+
+    def __init__(self, master, app: "App"):
+        self.app = app
+        super().__init__(master, "All lights  ▾", height=36, command=self._open)
+
+    def refresh(self):
+        lamp = next((l for l in self.app.cfg["lamps"] if l["id"] == self.app.target), None)
+        self.set_text(f"{lamp['name'] if lamp else 'All lights'}  ▾")
+
+    def _open(self):
+        menu = tk.Menu(self, tearoff=0, bg=SURFACE_2, fg=TEXT, activebackground=ACCENT_DIM,
+                       activeforeground=TEXT, bd=0, relief="flat", font=F.body)
+        self._choice = tk.StringVar(self, self.app.target)
+        menu.add_radiobutton(label="All lights   (B)", value="all", variable=self._choice,
+                             command=lambda: self.app.select_target("all"))
+        menu.add_separator()
+        for i, lamp in enumerate(self.app.cfg["lamps"]):
+            menu.add_radiobutton(label=lamp["name"] + (f"   ({i + 1})" if i < 9 else ""), value=lamp["id"],
+                                 variable=self._choice, command=lambda l=lamp["id"]: self.app.select_target(l))
+        try:
+            menu.tk_popup(self.winfo_rootx(), self.winfo_rooty() + self.winfo_height())
+        finally:
+            menu.grab_release()
+
+
 class LampTile(SmoothCanvas):
-    def __init__(self, master, app: "App", lamp_id: str, height=128):
-        super().__init__(master, height=px(height), width=px(200), cursor="hand2")
+    """One light: its colour, name, status and an on/off switch. With many lights
+    the tiles are compact (one line) so the window still fits on the screen."""
+
+    def __init__(self, master, app: "App", lamp_id: str, compact=False):
+        self.compact = compact
+        super().__init__(master, height=px(60 if compact else 128), width=px(200), cursor="hand2")
         self.app, self.lamp_id = app, lamp_id
         self.info: LampInfo | None = None
         self.selected = False
@@ -765,18 +804,24 @@ class LampTile(SmoothCanvas):
         # dimmed with a dashed ring: "this is what it will become".
         planned = bool(info and info.pending and not info.connected)
         state = info.target if info else LampState()
-        cx, cy, orb_d = px(42), px(50), px(40)
+        if self.compact:
+            cx, cy, orb_d = px(30), h // 2, px(28)
+        else:
+            cx, cy, orb_d = px(42), px(50), px(40)
         colour, level = None, 0.0
         if state.power:
             colour = gfx.quantize(lamp_hex(state))
             level = round((state.brightness or 1) / 254 * 20) / 20
-        art = gfx.lamp_tile(w, h, px(16), SURFACE, ACCENT if self.selected else BORDER,
+        art = gfx.lamp_tile(w, h, px(12 if self.compact else 16), SURFACE, ACCENT if self.selected else BORDER,
                             px(2) if self.selected else 1.0, (cx, cy), orb_d, colour, level,
                             planned, SURFACE_2, SURFACE_4)
         self.draw_image(0, 0, art)
         if not state.power:
-            self.create_text(cx, cy, text=ICON_POWER, font=F.icon, tags=("art",),
+            self.create_text(cx, cy, text=ICON_POWER, font=F.icon_small if self.compact else F.icon, tags=("art",),
                              fill=AMBER if planned else (FAINT if state.power is False else SURFACE_4))
+        if self.compact:
+            self._draw_compact(info, state, planned, w, h)
+            return
         x = px(80)
         name = info.name if info else self.lamp_id
         avail = w - x - px(14)
@@ -811,9 +856,31 @@ class LampTile(SmoothCanvas):
         self.coords(self._toggle_win, w - px(14), h - px(12))
         self.toggle.set(bool(state.power), enabled=not (info and info.status is LampStatus.STOPPED))
 
+    def _draw_compact(self, info, state, planned, w, h):
+        """Name on top; status, brightness and extras on one small line below."""
+        x = px(54)
+        avail = w - x - px(62)                         # stop before the on/off switch
+        name = info.name if info else self.lamp_id
+        self.create_text(x, h // 2 - px(9), text=fit_text(F.body_bold, name, avail), anchor="w",
+                         font=F.body_bold, fill=TEXT, tags=("art",))
+        dot, text = status_look(info, time.monotonic())
+        if info and info.status is LampStatus.CONNECTING and self.blink:
+            dot = SURFACE_4
+        if planned:
+            text = "queued"
+        elif info and info.connected and state.power is not None:
+            text = "Off" if not state.power else f"{pct_of(state.brightness)}%"
+            if state.power and state.effect:
+                text += f" · {EFFECT_NAMES.get(state.effect, 'Effect')}"
+        self.draw_image(x, h // 2 + px(10), gfx.circle(px(7), dot), anchor="w")
+        self.create_text(x + px(12), h // 2 + px(10), text=fit_text(F.small, text, avail - px(12)), anchor="w",
+                         font=F.small, fill=AMBER if planned else MUTED, tags=("art",))
+        self.coords(self._toggle_win, w - px(12), h // 2 + px(12))
+        self.toggle.set(bool(state.power), enabled=not (info and info.status is LampStatus.STOPPED))
+
 
 def status_look(info: LampInfo | None, now: float) -> tuple[str, str]:
-    """(dot colour, short Dutch status line)."""
+    """(dot colour, short status line)."""
     if info is None:
         return GREY, "Starting…"
     s = info.status
@@ -1094,7 +1161,7 @@ class ScanWindow:
             self.status.configure(text=f"Search failed: {exc}", fg=RED)
             return
         known = {lamp["address"] for lamp in self.app.cfg["lamps"]}
-        self.status.configure(text=f"Found {len(found)} Hue light(s)." if found else
+        self.status.configure(text=f"Found {len(found)} Hue light{'' if len(found) == 1 else 's'}." if found else
                               "No Hue lights heard. Are they switched on and nearby?", fg=MUTED)
         for seen in found:
             row = tk.Frame(self.rows, bg=SURFACE, padx=px(10), pady=px(8))
@@ -1219,8 +1286,9 @@ class ScheduleEditor:
         action = base["action"]
         scenes = config.all_scenes(app.cfg)
         self.days = set(base["days"])
+        self._ids = [l["id"] for l in app.cfg["lamps"]]
         lights = base["lights"]
-        self.lights = lights[0] if lights != "all" and len(lights) == 1 else "all"
+        self.lights = (set(self._ids) if lights == "all" else {i for i in lights if i in self._ids}) or set(self._ids)
         # Remember a choice per kind, so switching kinds back and forth keeps it.
         self.kind = action["type"]
         self.scene = action.get("scene") or (scenes[0]["name"] if scenes else None)
@@ -1249,10 +1317,18 @@ class ScheduleEditor:
             button.pack(side="left", padx=(0, px(4)))
             self.day_buttons.append(button)
 
-        if len(app.cfg["lamps"]) > 1:
+        self.light_buttons = {}
+        if len(self._ids) > 1:
             self._label(frame, "Lights")
-            Segmented(frame, [("all", "All lights")] + [(l["id"], l["name"]) for l in app.cfg["lamps"]],
-                      self.lights, self._set_lights, height=32).pack(fill="x")
+            grid = tk.Frame(frame, bg=BG)
+            grid.pack(fill="x")
+            grid.columnconfigure((0, 1, 2), weight=1, uniform="lights")
+            choices = [("all", "All lights")] + [(l["id"], l["name"]) for l in app.cfg["lamps"]]
+            for i, (key, label) in enumerate(choices):
+                button = PillButton(grid, label, height=30, font=F.small, command=lambda k=key: self._set_lights(k))
+                button.grid(row=i // 3, column=i % 3, sticky="ew", padx=px(2), pady=px(2))
+                self.light_buttons[key] = button
+            self._show_lights()
 
         self._label(frame, "Do")
         self.kinds = Segmented(frame, [("scene", "Scene"), ("color", "Color"), ("white", "White"), ("off", "Turn off")],
@@ -1372,7 +1448,22 @@ class ScheduleEditor:
         self.day_buttons[day].set_selected(day in self.days)
 
     def _set_lights(self, key):
-        self.lights = key
+        """'All lights', or one or more lights: a click from 'all' picks just that light,
+        further clicks add or remove lights."""
+        everything = set(self._ids)
+        if key == "all":
+            self.lights = everything
+        elif self.lights == everything:
+            self.lights = {key}
+        else:
+            self.lights ^= {key}
+            self.lights = self.lights or everything
+        self._show_lights()
+
+    def _show_lights(self):
+        everything = self.lights == set(self._ids)
+        for key, button in self.light_buttons.items():
+            button.set_selected(everything if key == "all" else not everything and key in self.lights)
 
     def _set_kind(self, kind):
         self.kind = kind
@@ -1423,8 +1514,8 @@ class ScheduleEditor:
                   "color": {"type": "color", "xy": list(self.xy), "brightness": bri},
                   "white": {"type": "white", "mireds": self.mireds, "brightness": bri},
                   "off": {"type": "off"}}[self.kind]
-        self.result = {"time": time, "until": until, "days": sorted(self.days),
-                       "lights": "all" if self.lights == "all" else [self.lights], "action": action}
+        lights = "all" if self.lights == set(self._ids) else [i for i in self._ids if i in self.lights]
+        self.result = {"time": time, "until": until, "days": sorted(self.days), "lights": lights, "action": action}
         self.win.destroy()
 
 
@@ -1741,9 +1832,13 @@ class App:
         return f"{name} ({kelvin} K) · {pct}"
 
     def describe_lights(self, lights) -> str:
-        if lights == "all" or len(self.cfg["lamps"]) < 2:
+        ids = {l["id"] for l in self.cfg["lamps"]}
+        if lights == "all" or len(ids) < 2 or ids <= set(lights):
             return "all lights"
-        return " and ".join(self._lamp_name(i) for i in lights)
+        names = [self._lamp_name(i) for i in lights if i in ids]
+        if len(names) <= 2:
+            return " and ".join(names) or "no lights"
+        return f"{len(names)} lights" if len(names) > 3 else f"{names[0]}, {names[1]} and {names[2]}"
 
     def open_schedule(self):
         if self.schedule_window is not None and self.schedule_window.win.winfo_exists():
@@ -1787,8 +1882,9 @@ class App:
 
         self.segment = Segmented(outer, [], self.target, self.select_target)
         self.segment.pack(fill="x", pady=(px(12), 0))
+        self.picker = LightPicker(outer, self)          # takes the tabs' place with many lights
 
-        power = tk.Frame(outer, bg=BG)
+        self.power_row = power = tk.Frame(outer, bg=BG)
         power.pack(fill="x", pady=(px(12), 0))
         power.columnconfigure((0, 1), weight=1, uniform="power")
         self.btn_on = PillButton(power, "On", icon=ICON_POWER, height=42, font=F.body_bold,
@@ -1827,9 +1923,8 @@ class App:
         self.log_toggle = tk.Label(footer, text="", font=F.small, bg=BG, fg=MUTED, cursor="hand2")
         self.log_toggle.pack(side="left")
         self.log_toggle.bind("<Button-1>", lambda e: self.toggle_log())
-        hint = tk.Label(footer, text="Space on/off · 1/2/B select · ↑↓ brightness", font=F.tiny,
-                        bg=BG, fg=FAINT)
-        hint.pack(side="right")
+        self.hint = tk.Label(footer, text=key_hint(len(self.cfg["lamps"])), font=F.tiny, bg=BG, fg=FAINT)
+        self.hint.pack(side="right")
         self.log_frame = tk.Frame(outer, bg=BG)
         self.log_text = tk.Text(self.log_frame, height=8, width=1, bg=SURFACE, fg=MUTED, font=F.mono, relief="flat",
                                 bd=0, padx=px(10), pady=px(8), wrap="word", highlightthickness=1,
@@ -1996,22 +2091,34 @@ class App:
             child.destroy()
         self.tile_widgets.clear()
         lamps = self.cfg["lamps"]
+        compact = len(lamps) > 4                 # many lights: one-line tiles, so the window still fits
         columns = 2 if len(lamps) != 1 else 1
+        last_row = (len(lamps) - 1) // columns
         for c in range(columns):
             self.tiles.columnconfigure(c, weight=1, uniform="tiles")
         for i, lamp in enumerate(lamps):
-            tile = LampTile(self.tiles, self, lamp["id"])
-            tile.grid(row=i // columns, column=i % columns, sticky="ew",
-                      padx=(0 if i % columns == 0 else px(5), px(5) if i % columns == 0 and columns == 2 else 0),
-                      pady=(0, px(10) if i + columns < len(lamps) else 0))
+            tile = LampTile(self.tiles, self, lamp["id"], compact=compact)
+            row, column = divmod(i, columns)
+            tile.grid(row=row, column=column, sticky="new",
+                      padx=(0 if column == 0 else px(5), px(5) if column == 0 and columns == 2 else 0),
+                      pady=(0, px(8 if compact else 10) if row < last_row else 0))
             self.tile_widgets[lamp["id"]] = tile
             if lamp["id"] in self.infos:
                 tile.update_info(self.infos[lamp["id"]], self._is_selected(lamp["id"]))
-        options = [("all", "Both" if len(lamps) == 2 else "All")]
-        options += [(lamp["id"], f"Light {i + 1}") for i, lamp in enumerate(lamps)]
-        if self.target not in {k for k, _ in options}:
+        if self.target != "all" and self.target not in {lamp["id"] for lamp in lamps}:
             self.target = "all"
-        self.segment.set_options(options if len(lamps) > 1 else options[:1], self.target)
+        # Up to four lights: tabs (All, Light 1, ...). More lights: a menu, which fits any number.
+        if len(lamps) > 4:
+            self.segment.pack_forget()
+            self.picker.pack(fill="x", pady=(px(12), 0), before=self.power_row)
+            self.picker.refresh()
+        else:
+            self.picker.pack_forget()
+            options = [("all", "Both" if len(lamps) == 2 else "All")]
+            options += [(lamp["id"], f"Light {i + 1}") for i, lamp in enumerate(lamps)]
+            self.segment.set_options(options if len(lamps) > 1 else options[:1], self.target)
+            self.segment.pack(fill="x", pady=(px(12), 0), before=self.power_row)
+        self.hint.configure(text=key_hint(len(lamps)))
         self._refresh_status()
 
     def _bind_keys(self):
@@ -2122,6 +2229,7 @@ class App:
     def select_target(self, target):
         self.target = target
         self.segment.set(target)
+        self.picker.refresh()
         for lamp_id, tile in self.tile_widgets.items():
             if lamp_id in self.infos:
                 tile.update_info(self.infos[lamp_id], self._is_selected(lamp_id))

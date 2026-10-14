@@ -15,7 +15,7 @@ Fast, reliable, and no Hue Bridge needed.
 
 ## What it does
 
-- **Both lights or one at a time.** Color wheel and presets, whites from candlelight to daylight, brightness, effects (candle, fireplace, sparkle and more) and scenes.
+- **All your lights, together or one by one.** Add as many Hue Bluetooth lights as you like: a desk lamp, a lightstrip, bulbs around the room. Color wheel and presets, whites from candlelight to daylight, brightness, effects (candle, fireplace, sparkle and more) and scenes.
 - **Fast.** The Bluetooth connection stays open, so a change reaches the light in about a tenth of a second.
 - **Doesn't give up.** Light switched off at the wall, out of range, Windows busy? It reconnects by itself.
 - **Set it and forget it.** Pick a color while a light is still unreachable: it is applied the moment the light is back, even if you already closed the window.
@@ -40,7 +40,7 @@ The first time you start Huetooth, the **Find lights** window opens by itself.
 
 1. Make sure Bluetooth is on (Windows Settings → Bluetooth & devices).
 2. Put your lights in pairing mode: in the **Philips Hue app** on your phone, go to **Settings → Voice assistants → Amazon Alexa** (or Google Home) and tap **Make discoverable**. New or factory-reset lights are already in pairing mode.
-3. Click **Add** next to each light. That's it.
+3. Click **Add** next to each light you want. That's it; you can add more lights any time (Settings → Find and add lights).
 
 <img src="docs/find-lights.png" width="430" alt="The Find lights window">
 
@@ -48,8 +48,9 @@ Lights that are already paired with Windows connect straight away. To see which 
 
 ## Everyday use
 
-- Choose **Both**, **Light 1** or **Light 2**, then a color, white, effect or scene.
-- Keyboard: <kbd>Space</kbd> on/off, <kbd>1</kbd> / <kbd>2</kbd> / <kbd>B</kbd> choose the light, <kbd>↑</kbd> <kbd>↓</kbd> brightness.
+- Choose **All** to control every light at once, or a single light: click its tile (or pick it in the row or menu above the On/Off buttons). Then pick a color, white, effect or scene.
+- Each light has its own on/off switch on its tile; double-click a tile to make that light blink.
+- Keyboard: <kbd>Space</kbd> on/off, <kbd>1</kbd>–<kbd>9</kbd> choose a light, <kbd>B</kbd> all lights, <kbd>↑</kbd> <kbd>↓</kbd> brightness.
 - Close the window when you're done: Huetooth keeps running in the notification area (next to the clock), still connected, so your lights react instantly. Click its icon to open the window again. Right-click it for **Turn all on/off**, **Scenes** and **Quit Huetooth**.
 - A choice for a light that is still unreachable is applied as soon as the light is back, and Windows lets you know with a notification.
 - Scenes: **Save current state** makes your own. **Edit** lets you delete any scene, the built-in ones too; **Restore default scenes** brings those back.
@@ -64,7 +65,7 @@ Lights that are already paired with Windows connect straight away. To see which 
 
 ## Schedules
 
-Click the **clock** at the top of the window to add one: a time, the days, which lights, and what to do (a scene, a color, a white, or off).
+Click the **clock** at the top of the window to add one: a time, the days, which lights (all of them or just some), and what to do (a scene, a color, a white, or off).
 
 <img src="docs/schedule.png" width="470" alt="The Schedule window with a schedule at 22:00">
 
@@ -95,6 +96,7 @@ When the app is open, commands go through it and are instant. When it isn't, `li
 | **One moment…** | Windows is still closing an earlier connection, for example right after restarting the app. This sorts itself out within about 20 seconds. |
 | **In use by another app** | Only one program on a PC can control a light at a time. Close other Hue tools or a second copy of Huetooth. |
 | **Not paired with Windows** | Remove the light in Windows Settings → Bluetooth & devices, put it in pairing mode again and use **Find lights → Add**. |
+| With many lights, some keep failing to connect | Huetooth keeps every light connected, and a Bluetooth adapter can only hold so many connections at once (headsets and controllers count too). A newer adapter usually handles more. |
 | You can't find the tray icon | It's behind the **^** arrow next to the clock. Drag it onto the taskbar to keep it in view. |
 | The Hue app on your phone can't connect | In Settings, choose *Release the lights after inactivity*, or click **Release now**. |
 | Connections drop often | USB 3 ports and cables disturb Bluetooth. Use a USB 2 port, or a short USB extension cable so the adapter sits away from the PC and in sight of the lights. |

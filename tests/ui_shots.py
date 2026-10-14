@@ -249,7 +249,8 @@ def readme_steps(app, cfg, shot, other_shot):
         # Lights that are connected do not advertise, so only the new ones show up.
         for lamp in lamps:
             mgr.transport.devices[lamp["address"]].reachable = False
-        for address, name in (("AA:BB:CC:00:00:03", "Hue color lamp"), ("AA:BB:CC:00:00:04", "Hue lightstrip")):
+        for address, name in (("AA:BB:CC:00:00:11", "Hue color lamp"), ("AA:BB:CC:00:00:12", "Hue lightstrip"),
+                              ("AA:BB:CC:00:00:13", "Hue Play")):
             mgr.transport.devices[address] = hc.SimDevice(address, name)
 
     def stop_offering(mgr):

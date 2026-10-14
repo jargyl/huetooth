@@ -44,7 +44,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 PROJECT_URL = "https://github.com/jargyl/huetooth"
 
 log = logging.getLogger("hue")

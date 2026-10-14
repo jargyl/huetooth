@@ -64,6 +64,9 @@ class UiTest(unittest.TestCase):
         self._style = hc.style_toplevel
         self._tray_factory = hc.TRAY_FACTORY
         hc.TRAY_FACTORY = FakeTray
+        # Whatever runs on this PC right now (a full-screen game...) must not change the results.
+        self._user_busy = hc.tray.user_busy
+        hc.tray.user_busy = lambda: False
 
         def invisible(win, parent, title):
             self._style(win, parent, title)
@@ -91,6 +94,7 @@ class UiTest(unittest.TestCase):
     def tearDown(self):
         hc.style_toplevel = self._style
         hc.TRAY_FACTORY = self._tray_factory
+        hc.tray.user_busy = self._user_busy
         logging.getLogger("hue").removeHandler(self.handler)
         try:
             self.app.quit()
@@ -338,6 +342,19 @@ class UiTest(unittest.TestCase):
         self.assertAlmostEqual(self.dev(1).state["xy"][0], red[0], places=2)
         self.assertEqual(self.errors, [])
 
+    def test_no_popups_during_full_screen_games(self):
+        app = self.app
+        app._quit_when_done = True                   # (pop-ups are only used when the app quits after)
+        shown, after = [], []
+        app.toast_factory = lambda *a, **kw: shown.append(a)
+        hc.tray.user_busy = lambda: True
+        app._notify("Done: your lights are updated.", then=lambda: after.append(True))
+        self.assertEqual(shown, [])                  # held back...
+        self.assertEqual(after, [True])              # ...but what comes next still happens
+        hc.tray.user_busy = lambda: False
+        app._notify("Done: your lights are updated.")
+        self.assertEqual(len(shown), 1)
+
     def test_tray_close_menu_and_quit(self):
         app = self.app
         tray = app.tray
@@ -398,6 +415,52 @@ class UiTest(unittest.TestCase):
             self.root.winfo_exists()
         self.assertTrue(tray.stopped)
         self.assertFalse(app.engine._thread.is_alive())
+        self.assertEqual(self.errors, [])
+
+    def test_many_lights(self):
+        """Six lights: compact tiles, a light menu instead of tabs, and it still fits."""
+        app = self.app
+        transport = app.engine.manager.transport
+        for n in range(3, 7):
+            address = f"AA:BB:CC:00:00:{n:02X}"
+            transport.devices[address] = hc.SimDevice(address, f"Hue light {n}")
+            app.add_lamp(address, f"Extra {n}")
+        self.wait(lambda: len(app.infos) == 6 and all(i.connected for i in app.infos.values()),
+                  timeout=15, what="six lights connected")
+        self.assertTrue(all(tile.compact for tile in app.tile_widgets.values()))
+        self.root.update_idletasks()
+        self.assertFalse(app.segment.winfo_ismapped())
+        self.assertTrue(app.picker.winfo_ismapped())
+        self.assertIn("1–6/B", app.hint.cget("text"))
+        self.assertLess(self.root.winfo_reqheight(), 950)              # fits a 1080p screen
+
+        app._select_index(5)                                          # key 5
+        self.assertEqual(app.picker.text, "Extra 5  ▾")
+        self.click(app.tile_widgets["L6"])                            # or click a tile
+        self.assertEqual(app.target, "L6")
+        app.select_target("all")
+        self.assertTrue(app.picker.text.startswith("All lights"))
+
+        app.apply_scene(config.find_scene(app.cfg, "Focus"))          # scenes reach every light
+        self.wait(lambda: all(transport.devices[l["address"]].state["mireds"] == 233 for l in app.cfg["lamps"]),
+                  what="scene on all six")
+        ids = [l["id"] for l in app.cfg["lamps"]]
+        self.assertEqual(app.describe_lights(ids), "all lights")
+        self.assertEqual(app.describe_lights(ids[:4]), "4 lights")
+        self.assertEqual(app.describe_lights(ids[:2]), "Left and Right")
+
+        # Back to two lights: tabs again ("Both", "Light 1", "Light 2").
+        for lamp_id in ids[2:]:
+            original = hc.messagebox.askyesno
+            hc.messagebox.askyesno = lambda *a, **kw: True
+            try:
+                app.remove_lamp(lamp_id)
+            finally:
+                hc.messagebox.askyesno = original
+        self.root.update_idletasks()
+        self.assertTrue(app.segment.winfo_ismapped())
+        self.assertEqual([label for _, label in app.segment.options], ["Both", "Light 1", "Light 2"])
+        self.assertFalse(any(tile.compact for tile in app.tile_widgets.values()))
         self.assertEqual(self.errors, [])
 
     def test_delete_and_restore_scenes(self):

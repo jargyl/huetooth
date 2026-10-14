@@ -1,3 +1,8 @@
+## What's new in 1.3
+
+- **Made for any number of lights.** With more than four lights the tiles become compact, so the window still fits your screen, and a menu replaces the row of light tabs. Click a tile or press 1–9 to pick a light.
+- Schedules can target any combination of lights.
+
 ## What's new in 1.2
 
 - **Schedules.** Click the clock at the top: "at 22:00 every day, make the lights red". They run while Huetooth runs (also hidden in the tray), and if it was closed at that time it catches up when it starts, until a time you choose. Each schedule runs once per day, so changing your lights afterwards sticks.
